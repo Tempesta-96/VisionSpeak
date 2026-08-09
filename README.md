@@ -1,21 +1,54 @@
 # VisionSpeak
 
-Starter project structure for a multimodal vision-based speech and gesture recognition system.
+VisionSpeak is a lightweight multimodal text transcription prototype that routes video input through a simple processing pipeline for lip-reading or hand-gesture recognition.
 
-## Structure
+## Current pipeline
 
-- `models/`: model stubs for lip reading, hand gestures, and modality classification
-- `processing/`: data loading, preprocessing, inference pipelines, and postprocessing
-- `utils/`: helper and visualization utilities
-- `data/`: raw, processed, and output assets
-- `weights/`: trained model checkpoints
-- `tests/`: basic pipeline tests
+```text
+main.py
+  -> video_loader.py
+  -> preprocessor.py
+  -> modality_classifier.py
+  -> lip_pipeline.py / gesture_pipeline.py
+  -> postprocessor.py
+  -> final text output
+```
 
-## Quick start
+## Project structure
+
+```text
+VisionSpeak/
+├── Dockerfile
+├── README.md
+├── main.py
+├── requirements.txt
+└── processing/
+    ├── gesture_pipeline.py
+    ├── lip_pipeline.py
+    ├── modality_classifier.py
+    ├── postprocessor.py
+    ├── preprocessor.py
+    └── video_loader.py
+```
+
+## Local run
+
+Install dependencies:
 
 ```bash
 pip install -r requirements.txt
-python main.py
-pytest
 ```
-A Multimodal Lip Reading and Hand Gesture Recognition System for Text Transcription
+
+Run with an MP4 file:
+
+```bash
+python main.py --source mp4 --video-path sample_video.mp4
+```
+
+Run with webcam:
+
+```bash
+python main.py --source webcam
+```
+
+Press `q` to exit the webcam preview window.
