@@ -1,4 +1,6 @@
 opencv-python
+numpy
+pandas
 matplotlib 
 imageio
 mediapipe #==0.10.14

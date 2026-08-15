@@ -52,3 +52,29 @@ python main.py --source webcam
 ```
 
 Press `q` to exit the webcam preview window.
+
+## Prepare the GRID lip-reading data
+
+From this directory, align the MPG videos with their word timestamps:
+
+```bash
+python align_videos.py --verbose
+```
+
+This writes one archive per video plus `data/processedData/aligned_words.csv`.
+The CSV uses one row per spoken word; `end_frame` is exclusive.
+
+Load the lightweight timing index as a DataFrame and retrieve pixels lazily:
+
+```python
+from aligned_dataframe import load_aligned_dataframe, load_word_frames
+
+aligned_words = load_aligned_dataframe()
+first_word_frames = load_word_frames(aligned_words.iloc[0])
+```
+
+Validate all generated archives and their timing metadata:
+
+```bash
+python validate_processed_data.py
+```
