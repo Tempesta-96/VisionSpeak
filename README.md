@@ -58,8 +58,11 @@ Press `q` to exit the webcam preview window.
 From this directory, align the MPG videos with their word timestamps:
 
 ```bash
-python align_videos.py --verbose
+python align_videos.py --crop-mouth --grayscale --verbose
 ```
+
+`--crop-mouth` crops and resizes each frame to the speaker's mouth region
+(default `100x50`, override with `--mouth-size WxH`).
 
 This writes one archive per video plus `data/processedData/aligned_words.csv`.
 The CSV uses one row per spoken word; `end_frame` is exclusive.

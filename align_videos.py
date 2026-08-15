@@ -5,8 +5,9 @@ For each video in --video-dir (data/s1/*.mpg) a matching alignment file in
 1/25000 s (25 kHz audio samples). Videos play at 25 fps, so a timestamp t maps
 to frame index t / 1000.
 
-Each video is saved as one .npz in --output-dir containing the full frame
-stack, the per-word frame ranges and the per-word frame segments.
+Each video is saved as one .npz in --output-dir containing the frame stack,
+the per-word frame ranges and the per-word frame segments. With --crop-mouth,
+frames are cropped and resized to the speaker's mouth region first.
 """
 
 import argparse
@@ -16,6 +17,8 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+
+from processing.mouth_cropper import MouthCropper
 
 SAMPLE_RATE_HZ = 25000
 VIDEO_FPS = 25
@@ -38,6 +41,21 @@ MANIFEST_FIELDS = (
     "frame_count",
     "fps",
 )
+
+
+def parse_mouth_size(value: str) -> tuple[int, int]:
+    """Parse a ``WxH`` string into a ``(width, height)`` tuple."""
+    try:
+        width, height = (int(part) for part in value.lower().split("x"))
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"Expected WxH (e.g. 100x50), got: {value}"
+        )
+    if width <= 0 or height <= 0:
+        raise argparse.ArgumentTypeError(
+            f"Mouth size must be positive, got: {value}"
+        )
+    return (width, height)
 
 
 def parse_args() -> argparse.Namespace:
@@ -80,6 +98,18 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print per-video details.",
     )
+    parser.add_argument(
+        "--crop-mouth",
+        action="store_true",
+        help="Crop and resize frames to the mouth region using MediaPipe.",
+    )
+    parser.add_argument(
+        "--mouth-size",
+        type=parse_mouth_size,
+        default=(100, 50),
+        metavar="WxH",
+        help="Target size for mouth crops when --crop-mouth is set.",
+    )
     return parser.parse_args()
 
 
@@ -102,8 +132,16 @@ def read_alignment(
     return align_lines, tokens
 
 
-def load_video(video_path: Path, grayscale: bool) -> tuple[np.ndarray, float]:
-    """Read every frame and return the frame stack plus reported frame rate."""
+def load_video(
+    video_path: Path,
+    grayscale: bool,
+    cropper: MouthCropper | None = None,
+) -> tuple[np.ndarray, float]:
+    """Read every frame and return the frame stack plus reported frame rate.
+
+    When ``cropper`` is provided, each frame is cropped and resized to the
+    mouth region before the optional grayscale conversion.
+    """
     capture = cv2.VideoCapture(str(video_path))
     if not capture.isOpened():
         raise ValueError(f"Could not open video: {video_path}")
@@ -113,13 +151,18 @@ def load_video(video_path: Path, grayscale: bool) -> tuple[np.ndarray, float]:
         fps = float(VIDEO_FPS)
 
     frames = []
+    frame_index = 0
     while True:
         success, frame = capture.read()
         if not success:
             break
+        if cropper is not None:
+            timestamp_ms = int((frame_index / fps) * 1000)
+            frame = cropper.crop(frame, timestamp_ms)
         if grayscale:
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         frames.append(frame)
+        frame_index += 1
     capture.release()
 
     if not frames:
@@ -161,9 +204,33 @@ def extract_word_segments(
 
 
 def process_video(
-    video_path: Path, align_path: Path, output_dir: Path, grayscale: bool
+    video_path: Path,
+    align_path: Path,
+    output_dir: Path,
+    grayscale: bool,
+    crop_mouth: bool = False,
+    mouth_size: tuple[int, int] = (100, 50),
 ) -> dict:
-    frames, fps = load_video(video_path, grayscale)
+    cropper = MouthCropper(target_size=mouth_size) if crop_mouth else None
+    if cropper is not None:
+        cropper.open()
+    try:
+        return _process_video(
+            video_path, align_path, output_dir, grayscale, cropper
+        )
+    finally:
+        if cropper is not None:
+            cropper.close()
+
+
+def _process_video(
+    video_path: Path,
+    align_path: Path,
+    output_dir: Path,
+    grayscale: bool,
+    cropper: MouthCropper | None,
+) -> dict:
+    frames, fps = load_video(video_path, grayscale, cropper)
     total_frames = frames.shape[0]
     time_units_per_frame = SAMPLE_RATE_HZ / fps
 
@@ -297,7 +364,12 @@ def main() -> None:
 
         try:
             info = process_video(
-                video_path, align_path, args.output_dir, args.grayscale
+                video_path,
+                align_path,
+                args.output_dir,
+                args.grayscale,
+                crop_mouth=args.crop_mouth,
+                mouth_size=args.mouth_size,
             )
         except (ValueError, OSError) as error:
             skipped += 1
