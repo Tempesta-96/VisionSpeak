@@ -67,19 +67,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--video-dir",
         type=Path,
-        default=Path("data/s1"),
+        default=Path("data/lips-dataset/s1"),
         help="Directory containing the .mpg video files.",
     )
     parser.add_argument(
         "--align-dir",
         type=Path,
-        default=Path("data/alignments/s1"),
+        default=Path("data/lips-dataset/alignments/s1"),
         help="Directory containing the .align alignment files.",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("data/processedData"),
+        default=Path("data/lips-dataset/processedData"),
         help="Directory where the .npz files are written.",
     )
     parser.add_argument(
