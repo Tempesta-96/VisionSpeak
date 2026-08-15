@@ -55,7 +55,8 @@ Press `q` to exit the webcam preview window.
 
 ## Prepare the GRID lip-reading data
 
-From this directory, align the MPG videos with their word timestamps:
+The GRID data lives under `data/lips-dataset/` with `s1/*.mpg` videos and
+`alignments/s1/*.align` word timestamps. From this directory, align them:
 
 ```bash
 python align_videos.py --crop-mouth --grayscale --verbose
@@ -64,7 +65,7 @@ python align_videos.py --crop-mouth --grayscale --verbose
 `--crop-mouth` crops and resizes each frame to the speaker's mouth region
 (default `100x50`, override with `--mouth-size WxH`).
 
-This writes one archive per video plus `data/processedData/aligned_words.csv`.
+This writes one archive per video plus `data/lips-dataset/processedData/aligned_words.csv`.
 The CSV uses one row per spoken word; `end_frame` is exclusive.
 
 Load the lightweight timing index as a DataFrame and retrieve pixels lazily:

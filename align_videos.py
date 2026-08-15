@@ -1,7 +1,8 @@
 """Align GRID-corpus videos with their word-level alignment files.
 
-For each video in --video-dir (data/s1/*.mpg) a matching alignment file in
---align-dir (data/alignments/s1/*.align) provides word boundaries in units of
+For each video in --video-dir (data/lips-dataset/s1/*.mpg) a matching
+alignment file in --align-dir (data/lips-dataset/alignments/s1/*.align)
+provides word boundaries in units of
 1/25000 s (25 kHz audio samples). Videos play at 25 fps, so a timestamp t maps
 to frame index t / 1000.
 
