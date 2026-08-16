@@ -53,7 +53,7 @@ def _stratified_split(
     test_indices: list[np.ndarray] = []
 
     for _, group in df.groupby("word", sort=False):
-        indices = group.index.to_numpy()
+        indices = np.asarray(group.index.to_numpy()).copy()
         rng.shuffle(indices)
         n_test = max(1, math.ceil(len(indices) * test_size))
         test_indices.append(indices[:n_test])
