@@ -8,7 +8,7 @@ import pandas as pd
 
 
 def load_aligned_dataframe(
-    processed_dir: str | Path = "data/processedData",
+    processed_dir: str | Path = "data/lips-dataset/processedData",
 ) -> pd.DataFrame:
     """Load one row per spoken word without loading video arrays into memory.
 

@@ -31,7 +31,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--processed-dir",
         type=Path,
-        default=Path("data/processedData"),
+        default=Path("data/lips-dataset/processedData"),
         help="Directory containing .npz files and aligned_words.csv.",
     )
     return parser.parse_args()
