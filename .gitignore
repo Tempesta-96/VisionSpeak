@@ -1,4 +1,6 @@
-data/lips-dataset
+data/
+.dockerignore
+Dockerfile
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
