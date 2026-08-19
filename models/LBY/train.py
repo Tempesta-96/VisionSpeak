@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 
 from dataset import get_word_classification_dataloaders
-from model import LipReadingClassifier
+from models.LBY.model import LipReadingClassifier
 
 
 def parse_args() -> argparse.Namespace:
