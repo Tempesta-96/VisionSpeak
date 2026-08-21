@@ -1,28 +1,36 @@
-"""Train a LipNet-style CTC model with the existing PyTorch data pipeline."""
+"""Train the Valente LipNet model on complete GRID sentences with CTC."""
 
 from __future__ import annotations
 
 import argparse
+import os
 import random
 from pathlib import Path
 
+# Matches the existing notebook setup for the project's Windows environment.
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
+from torch.utils.data import DataLoader, Dataset
 
-from dataset import get_dataloaders
-from models.valente.model import LipNetCTC, ctc_greedy_decode, tokens_to_text
+from aligned_dataframe import load_aligned_dataframe, load_word_frames
+from models.valente.model import LipNet, ctc_greedy_decode, tokens_to_text
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train the PyTorch LipNet model.")
+    parser = argparse.ArgumentParser(
+        description="Train sentence-level LipNet with CTC loss."
+    )
     parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--batch-size", type=int, default=2)
+    parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--device", type=str, default=None)
-    parser.add_argument("--test-size", type=float, default=0.1)
+    parser.add_argument("--test-size", type=float, default=0.2)
     parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--out-dir", type=Path, default=Path("checkpoints"))
     return parser.parse_args()
 
@@ -45,156 +53,286 @@ def get_device(preferred: str | None = None) -> torch.device:
     return torch.device("cpu")
 
 
-def scheduler(epoch: int, current_lr: float) -> float:
-    if epoch < 30:
-        return current_lr
-    return current_lr * float(np.exp(-0.1))
+def build_char_vocab(dataframe: pd.DataFrame) -> tuple[dict[str, int], dict[int, str]]:
+    """Build a character vocabulary with index zero reserved for CTC blank."""
+    characters = sorted(set(" ".join(dataframe["word"].astype(str))))
+    char_to_index = {character: index + 1 for index, character in enumerate(characters)}
+    index_to_char = {index: character for character, index in char_to_index.items()}
+    return char_to_index, index_to_char
 
 
-def flatten_targets(labels: torch.Tensor, target_lengths: torch.Tensor) -> torch.Tensor:
-    chunks = [
-        labels[index, : int(target_lengths[index].item())]
-        for index in range(labels.size(0))
-    ]
-    return torch.cat(chunks, dim=0)
+class SentenceDataset(Dataset):
+    """One lazily loaded sample per video, labelled by its complete sentence."""
+
+    def __init__(
+        self,
+        dataframe: pd.DataFrame,
+        video_ids: np.ndarray,
+        char_to_index: dict[str, int],
+    ) -> None:
+        self.char_to_index = char_to_index
+        self.items: list[tuple[str, pd.DataFrame, str]] = []
+
+        for video_id in video_ids:
+            rows = dataframe[dataframe["video_id"] == video_id].sort_values("word_index")
+            text = " ".join(rows["word"].astype(str))
+            self.items.append((str(video_id), rows, text))
+
+    def __len__(self) -> int:
+        return len(self.items)
+
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, str, str]:
+        video_id, rows, text = self.items[index]
+        frames = np.concatenate(
+            [load_word_frames(row) for _, row in rows.iterrows()],
+            axis=0,
+        )
+        frames_tensor = torch.from_numpy(frames.astype(np.float32) / 255.0)
+        frames_tensor = (frames_tensor - frames_tensor.mean()) / (
+            frames_tensor.std() + 1e-6
+        )
+        frames_tensor = frames_tensor.unsqueeze(1)
+        targets = torch.tensor(
+            [self.char_to_index[character] for character in text],
+            dtype=torch.long,
+        )
+        return frames_tensor, targets, text, video_id
 
 
-def move_batch_to_device(batch, device: torch.device):
-    frames, labels, input_lengths, target_lengths = batch
+def sentence_collate(
+    batch: list[tuple[torch.Tensor, torch.Tensor, str, str]],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, list[str], list[str]]:
+    """Pad video frames and concatenate variable-length CTC targets."""
+    frames, targets, texts, video_ids = zip(*batch)
+    input_lengths = torch.tensor([item.size(0) for item in frames], dtype=torch.long)
+    target_lengths = torch.tensor([item.size(0) for item in targets], dtype=torch.long)
+    padded_frames = torch.zeros(
+        len(frames),
+        int(input_lengths.max()),
+        *frames[0].shape[1:],
+        dtype=frames[0].dtype,
+    )
+    for index, item in enumerate(frames):
+        padded_frames[index, : item.size(0)] = item
     return (
-        frames.to(device),
-        labels.to(device),
-        input_lengths.to(device),
-        target_lengths.to(device),
+        padded_frames,
+        torch.cat(targets),
+        input_lengths,
+        target_lengths,
+        list(texts),
+        list(video_ids),
     )
 
 
+def create_dataloaders(
+    dataframe: pd.DataFrame,
+    char_to_index: dict[str, int],
+    batch_size: int,
+    test_size: float,
+    seed: int,
+    num_workers: int,
+) -> tuple[DataLoader, DataLoader]:
+    if not 0.0 < test_size < 1.0:
+        raise ValueError("--test-size must be between zero and one.")
+
+    video_ids = np.array(sorted(dataframe["video_id"].dropna().unique()))
+    rng = np.random.default_rng(seed)
+    rng.shuffle(video_ids)
+    split_index = int(len(video_ids) * (1.0 - test_size))
+    if split_index == 0 or split_index == len(video_ids):
+        raise ValueError("The requested split leaves no train or test sentences.")
+
+    train_dataset = SentenceDataset(dataframe, video_ids[:split_index], char_to_index)
+    test_dataset = SentenceDataset(dataframe, video_ids[split_index:], char_to_index)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        collate_fn=sentence_collate,
+        num_workers=num_workers,
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        collate_fn=sentence_collate,
+        num_workers=num_workers,
+    )
+    return train_loader, test_loader
+
+
+def character_error_rate(prediction: str, target: str) -> float:
+    """Compute Levenshtein distance normalised by the target length."""
+    previous = list(range(len(target) + 1))
+    for row, predicted_character in enumerate(prediction, start=1):
+        current = [row]
+        for column, target_character in enumerate(target, start=1):
+            current.append(
+                min(
+                    previous[column] + 1,
+                    current[column - 1] + 1,
+                    previous[column - 1] + (predicted_character != target_character),
+                )
+            )
+        previous = current
+    return previous[-1] / max(len(target), 1)
+
+
+def decode_log_probs(
+    log_probs: torch.Tensor,
+    input_lengths: torch.Tensor,
+    blank_index: int,
+    index_to_char: dict[int, str],
+) -> list[str]:
+    tokens = ctc_greedy_decode(log_probs.detach().cpu(), input_lengths.cpu(), blank_index)
+    return [tokens_to_text(sequence, index_to_char) for sequence in tokens]
+
+
 def run_epoch(
-    model: LipNetCTC,
-    loader,
-    criterion,
+    model: LipNet,
+    loader: DataLoader,
+    ctc_loss: nn.CTCLoss,
+    optimizer: torch.optim.Optimizer | None,
     device: torch.device,
-    optimizer: torch.optim.Optimizer | None = None,
-) -> float:
-    is_training = optimizer is not None
-    model.train(is_training)
-    total_loss = 0.0
-    total_batches = 0
+    blank_index: int,
+    index_to_char: dict[int, str],
+) -> tuple[float, float, float]:
+    training = optimizer is not None
+    model.train(training)
+    total_loss = total_cer = 0.0
+    total_exact = total_sentences = 0
 
-    for batch in loader:
-        frames, labels, input_lengths, target_lengths = move_batch_to_device(
-            batch, device
+    for frames, targets, input_lengths, target_lengths, texts, _ in loader:
+        frames = frames.to(device)
+        targets = targets.to(device)
+        with torch.set_grad_enabled(training):
+            log_probs, output_lengths = model.ctc_log_probs(frames, input_lengths)
+            loss = ctc_loss(log_probs, targets, output_lengths.cpu(), target_lengths.cpu())
+            if training:
+                optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+                optimizer.step()
+
+        predictions = decode_log_probs(
+            log_probs,
+            output_lengths,
+            blank_index,
+            index_to_char,
         )
-        flattened_targets = flatten_targets(labels, target_lengths)
+        total_loss += float(loss.item()) * len(texts)
+        total_cer += sum(
+            character_error_rate(prediction, target)
+            for prediction, target in zip(predictions, texts)
+        )
+        total_exact += sum(
+            prediction == target for prediction, target in zip(predictions, texts)
+        )
+        total_sentences += len(texts)
 
-        if is_training:
-            optimizer.zero_grad()
-
-        log_probs = model(frames)
-        loss = criterion(log_probs, flattened_targets, input_lengths, target_lengths)
-
-        if is_training:
-            loss.backward()
-            optimizer.step()
-
-        total_loss += float(loss.item())
-        total_batches += 1
-
-    return total_loss / max(total_batches, 1)
+    return (
+        total_loss / max(total_sentences, 1),
+        total_cer / max(total_sentences, 1),
+        total_exact / max(total_sentences, 1),
+    )
 
 
 @torch.no_grad()
 def preview_predictions(
-    model: LipNetCTC,
-    loader,
+    model: LipNet,
+    loader: DataLoader,
     device: torch.device,
-    num_to_char: dict[int, str],
-    limit: int = 2,
+    blank_index: int,
+    index_to_char: dict[int, str],
+    limit: int = 3,
 ) -> None:
     model.eval()
-    frames, labels, input_lengths, target_lengths = move_batch_to_device(
-        next(iter(loader)), device
-    )
-    log_probs = model(frames)
-    decoded = ctc_greedy_decode(log_probs, input_lengths, model.blank_index)
-
-    for index in range(min(limit, frames.size(0))):
-        target_tokens = labels[index, : int(target_lengths[index].item())].tolist()
-        print("Original:", tokens_to_text(target_tokens, num_to_char))
-        print("Prediction:", tokens_to_text(decoded[index], num_to_char))
+    frames, _, input_lengths, _, texts, _ = next(iter(loader))
+    log_probs, output_lengths = model.ctc_log_probs(frames.to(device), input_lengths)
+    predictions = decode_log_probs(log_probs, output_lengths, blank_index, index_to_char)
+    for target, prediction in zip(texts[:limit], predictions[:limit]):
+        print(f"Target:     {target}")
+        print(f"Prediction: {prediction}")
         print("~" * 80)
-
-
-def save_checkpoint(
-    out_dir: Path,
-    epoch: int,
-    model: LipNetCTC,
-    optimizer: torch.optim.Optimizer,
-    char_to_num: dict[str, int],
-    num_to_char: dict[int, str],
-    val_loss: float,
-) -> None:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint = {
-        "epoch": epoch,
-        "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-        "char_to_num": char_to_num,
-        "num_to_char": num_to_char,
-        "val_loss": val_loss,
-    }
-    torch.save(checkpoint, out_dir / "best_lipnet_ctc.pt")
 
 
 def main() -> None:
     args = parse_args()
     set_seed(args.seed)
     device = get_device(args.device)
-    print(f"Using device: {device}")
-
-    train_loader, test_loader, char_to_num, num_to_char = get_dataloaders(
-        test_size=args.test_size,
-        seed=args.seed,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        stratify=False,
+    dataframe = load_aligned_dataframe()
+    char_to_index, index_to_char = build_char_vocab(dataframe)
+    blank_index = 0
+    train_loader, test_loader = create_dataloaders(
+        dataframe,
+        char_to_index,
+        args.batch_size,
+        args.test_size,
+        args.seed,
+        args.num_workers,
     )
 
-    model = LipNetCTC(vocab_size=len(char_to_num)).to(device)
+    print(f"Device: {device}")
+    print(f"Train sentences: {len(train_loader.dataset)}")
+    print(f"Test sentences: {len(test_loader.dataset)}")
+    print(f"Character classes: {len(char_to_index)} + CTC blank")
+
+    model = LipNet(num_classes=len(char_to_index) + 1).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    criterion = nn.CTCLoss(blank=model.blank_index, zero_infinity=True)
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(
+        optimizer,
+        milestones=[60, 85],
+        gamma=0.1,
+    )
+    ctc_loss = nn.CTCLoss(blank=blank_index, zero_infinity=True)
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = args.out_dir / "valente_lipnet_ctc.pt"
+    best_cer = float("inf")
 
-    best_val_loss = float("inf")
-    current_lr = args.lr
-
-    for epoch in range(args.epochs):
-        for param_group in optimizer.param_groups:
-            param_group["lr"] = current_lr
-
-        train_loss = run_epoch(model, train_loader, criterion, device, optimizer)
-        val_loss = run_epoch(model, test_loader, criterion, device)
-        print(
-            f"Epoch {epoch + 1:3d}/{args.epochs} | "
-            f"train_loss {train_loss:.4f} | val_loss {val_loss:.4f} | lr {current_lr:.6f}"
+    for epoch in range(1, args.epochs + 1):
+        train_loss, train_cer, train_exact = run_epoch(
+            model,
+            train_loader,
+            ctc_loss,
+            optimizer,
+            device,
+            blank_index,
+            index_to_char,
         )
+        test_loss, test_cer, test_exact = run_epoch(
+            model,
+            test_loader,
+            ctc_loss,
+            None,
+            device,
+            blank_index,
+            index_to_char,
+        )
+        scheduler.step()
+        print(
+            f"Epoch {epoch:03d}/{args.epochs} | "
+            f"train loss {train_loss:.4f} CER {train_cer:.3f} exact {train_exact:.3f} | "
+            f"test loss {test_loss:.4f} CER {test_cer:.3f} exact {test_exact:.3f} | "
+            f"lr {optimizer.param_groups[0]['lr']:.1e}"
+        )
+        preview_predictions(model, test_loader, device, blank_index, index_to_char)
 
-        preview_predictions(model, test_loader, device, num_to_char)
-
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            save_checkpoint(
-                args.out_dir,
-                epoch + 1,
-                model,
-                optimizer,
-                char_to_num,
-                num_to_char,
-                val_loss,
+        if test_cer < best_cer:
+            best_cer = test_cer
+            torch.save(
+                {
+                    "epoch": epoch,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "char_to_index": char_to_index,
+                    "blank_index": blank_index,
+                    "test_cer": test_cer,
+                },
+                checkpoint_path,
             )
 
-        current_lr = scheduler(epoch + 1, current_lr)
-
-    print(f"Best validation loss: {best_val_loss:.4f}")
+    print(f"Best test CER: {best_cer:.4f}")
+    print(f"Best checkpoint: {checkpoint_path}")
 
 
 if __name__ == "__main__":
