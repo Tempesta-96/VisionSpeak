@@ -54,7 +54,9 @@ class Preprocessor:
 
     def convert_to_greyscale(self, video_data: dict) -> dict:
         frames = video_data.get("frames", [])
-        if not frames:
+        
+        # Check if frames is empty
+        if len(frames) == 0:
             return video_data
 
         greyscale_frames = [
@@ -63,5 +65,5 @@ class Preprocessor:
             else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             for frame in frames
         ]
-        video_data["frames"] = greyscale_frames
+        video_data["frames"] = np.array(greyscale_frames, dtype=np.uint8)
         return video_data

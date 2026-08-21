@@ -133,7 +133,9 @@ class VideoLoader:
 
                     if cv2.waitKey(1) & 0xFF == ord("q"):
                         break
-
+                    
+                frames = [cv2.resize(frame, (100, 50)) for frame in frames]
+                frames = np.array(frames, dtype=np.float32)   
                 return {
                     "source_type": "webcam",
                     "path": None,
@@ -154,10 +156,15 @@ class VideoLoader:
                 if not success:
                     break
                 timestamp_ms = int((frame_index / fps) * 1000)
-                frames.append(self._crop_mouth_area(
-                    frame, landmarker, timestamp_ms))
+                mouth_frame = self._crop_mouth_area(
+                    frame, 
+                    landmarker, 
+                    timestamp_ms)
+                frames.append(mouth_frame)
                 frame_index += 1
 
+            frames = [cv2.resize(frame, (100, 50)) for frame in frames]
+            frames = np.array(frames, dtype=np.float32)
             capture.release()
             return {
                 "source_type": "video_file",
