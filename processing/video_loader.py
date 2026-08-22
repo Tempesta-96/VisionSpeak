@@ -60,50 +60,99 @@ class VideoLoader:
             return None
         return result.face_landmarks[0]
 
-    def _crop_mouth_area(self, frame, landmarker: vision.FaceLandmarker, timestamp_ms: int | None = None,):
+    def _crop_mouth_area(
+        self,
+        frame,
+        landmarker: vision.FaceLandmarker,
+        timestamp_ms: int | None = None,
+    ) -> tuple[np.ndarray, tuple[int, int, int, int] | None]:
+        """Return a mouth crop and the padded box used to produce it.
+
+        A missing detection reuses the last valid box when possible. If no box
+        has been detected yet, the method returns a center crop and ``None``
+        so callers can distinguish that fallback from a lip detection.
+        """
         landmarks = self._detect_landmarks(frame, landmarker, timestamp_ms)
+        crop_box = None
+        if landmarks is not None:
+            height, width = frame.shape[:2]
+            lip_points = np.array(
+                [
+                    (int(landmarks[idx].x * width), int(landmarks[idx].y * height))
+                    for idx in self._LIP_LANDMARK_IDS
+                ],
+                dtype=np.int32,
+            )
 
-        if landmarks is None:
-            if self._last_crop_box is not None:
-                return self._crop_from_box(frame, self._last_crop_box)
-            return self._center_crop(frame)
+            x_coords = lip_points[:, 0]
+            y_coords = lip_points[:, 1]
+            x_min = int(x_coords.min())
+            x_max = int(x_coords.max())
+            y_min = int(y_coords.min())
+            y_max = int(y_coords.max())
 
-        height, width = frame.shape[:2]
-        lip_points = np.array(
-            [
-                (int(landmarks[idx].x * width), int(landmarks[idx].y * height))
-                for idx in self._LIP_LANDMARK_IDS
-            ],
-            dtype=np.int32,
+            mouth_width = max(x_max - x_min, 1)
+            mouth_height = max(y_max - y_min, 1)
+
+            pad_x = max(int(mouth_width * 0.25), 12)
+            pad_y = max(int(mouth_height * 0.6), 12)
+
+            x1 = max(x_min - pad_x, 0)
+            y1 = max(y_min - pad_y, 0)
+            x2 = min(x_max + pad_x, width)
+            y2 = min(y_max + pad_y, height)
+
+            if x2 > x1 and y2 > y1:
+                crop_box = (x1, y1, x2, y2)
+                self._last_crop_box = crop_box
+
+        crop_box = crop_box or self._last_crop_box
+        if crop_box is not None:
+            return self._crop_from_box(frame, crop_box), crop_box
+        return self._center_crop(frame), None
+
+    @staticmethod
+    def _full_frame_preview(
+        frame: np.ndarray,
+        crop_box: tuple[int, int, int, int] | None,
+    ) -> np.ndarray:
+        """Draw the mouth-crop box on a full webcam frame for display."""
+        preview = frame.copy()
+        if crop_box is None:
+            cv2.putText(
+                preview,
+                "Lips not detected",
+                (12, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0, 0, 255),
+                2,
+                cv2.LINE_AA,
+            )
+            return preview
+
+        x1, y1, x2, y2 = crop_box
+        cv2.rectangle(
+            preview,
+            (x1, y1),
+            (x2 - 1, y2 - 1),
+            (0, 255, 0),
+            2,
+            cv2.LINE_AA,
         )
+        cv2.putText(
+            preview,
+            "Mouth crop",
+            (x1, max(y1 - 8, 20)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (0, 255, 0),
+            2,
+            cv2.LINE_AA,
+        )
+        return preview
 
-        x_coords = lip_points[:, 0]
-        y_coords = lip_points[:, 1]
-        x_min = int(x_coords.min())
-        x_max = int(x_coords.max())
-        y_min = int(y_coords.min())
-        y_max = int(y_coords.max())
-
-        mouth_width = max(x_max - x_min, 1)
-        mouth_height = max(y_max - y_min, 1)
-
-        pad_x = max(int(mouth_width * 0.25), 12)
-        pad_y = max(int(mouth_height * 0.6), 12)
-
-        x1 = max(x_min - pad_x, 0)
-        y1 = max(y_min - pad_y, 0)
-        x2 = min(x_max + pad_x, width)
-        y2 = min(y_max + pad_y, height)
-
-        if x2 <= x1 or y2 <= y1:
-            if self._last_crop_box is not None:
-                return self._crop_from_box(frame, self._last_crop_box)
-            return self._center_crop(frame)
-
-        self._last_crop_box = (x1, y1, x2, y2)
-        return frame[y1:y2, x1:x2]
-
-    def load(self, source: str) -> dict:
+    def load(self, source: str, *, show_full_frame: bool = False) -> dict:
         frames = []
         if not self._model_path.exists():
             raise FileNotFoundError(
@@ -122,13 +171,18 @@ class VideoLoader:
                     if not success:
                         break
 
-                    mouth_frame = self._crop_mouth_area(
+                    mouth_frame, crop_box = self._crop_mouth_area(
                         frame,
                         landmarker,
                         timestamp_ms=frame_index * 33,
                     )
                     frames.append(mouth_frame)
-                    cv2.imshow("VisionSpeak Webcam", mouth_frame)
+                    preview_frame = (
+                        self._full_frame_preview(frame, crop_box)
+                        if show_full_frame
+                        else mouth_frame
+                    )
+                    cv2.imshow("VisionSpeak Webcam", preview_frame)
                     frame_index += 1
 
                     if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -156,7 +210,7 @@ class VideoLoader:
                 if not success:
                     break
                 timestamp_ms = int((frame_index / fps) * 1000)
-                mouth_frame = self._crop_mouth_area(
+                mouth_frame, _ = self._crop_mouth_area(
                     frame, 
                     landmarker, 
                     timestamp_ms)
