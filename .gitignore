@@ -1,4 +1,4 @@
-data/
+#data/
 .dockerignore
 Dockerfile
 
@@ -220,4 +220,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-data
+
+# dataset that was downloaded
+data/lips-dataset
