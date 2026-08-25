@@ -1,0 +1,6 @@
+train: C:\Users\ah_pe\Desktop\yolov8_test\train\images
+val: C:\Users\ah_pe\Desktop\yolov8_test\valid\images
+test: C:\Users\ah_pe\Desktop\yolov8_test\test\images
+
+nc: 18
+names: ['I', 'apple', 'can', 'get', 'good', 'have', 'help', 'how', 'like', 'love', 'my', 'no', 'sorry', 'thank-you', 'want', 'yes', 'you', 'your']
