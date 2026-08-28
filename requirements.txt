@@ -1,7 +1,12 @@
-opencv-python
-numpy
-pandas
-matplotlib 
+# VisionSpeak dependencies
+# Pinned for macOS arm64 / Python 3.11 (conda env `visionspeak`).
+# mediapipe requires opencv-contrib-python; do NOT also install opencv-python
+# (two cv2 packages in one env cause native crashes).
+numpy<2
+opencv-contrib-python<5
+mediapipe==0.10.35
+pandas<3
+matplotlib
 imageio
-mediapipe #==0.10.14
 torch
+ipykernel
