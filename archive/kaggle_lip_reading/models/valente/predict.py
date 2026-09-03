@@ -12,10 +12,16 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 import numpy as np
 import torch
 
-from aligned_dataframe import load_aligned_dataframe, load_word_frames
+from archive.kaggle_lip_reading.aligned_dataframe import (
+    load_aligned_dataframe,
+    load_word_frames,
+)
 from models.valente.model import LipNet, ctc_greedy_decode, tokens_to_text
 from processing.preprocessor import Preprocessor
 from processing.video_loader import VideoLoader
+
+
+ARCHIVE_ROOT = Path(__file__).resolve().parents[2]
 
 
 def parse_args() -> argparse.Namespace:
@@ -23,7 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--checkpoint",
         type=Path,
-        default=Path("checkpoints/valente_lipnet_ctc.pt"),
+        default=ARCHIVE_ROOT / "checkpoints/valente_lipnet_ctc.pt",
     )
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--video-path", type=Path, default=None)

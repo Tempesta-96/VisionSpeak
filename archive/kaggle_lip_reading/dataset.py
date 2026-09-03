@@ -14,7 +14,10 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from aligned_dataframe import load_aligned_dataframe, load_word_frames
+from archive.kaggle_lip_reading.aligned_dataframe import (
+    load_aligned_dataframe,
+    load_word_frames,
+)
 
 
 def split_aligned_dataframe(

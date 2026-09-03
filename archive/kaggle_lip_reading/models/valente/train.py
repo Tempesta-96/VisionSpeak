@@ -16,8 +16,14 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 
-from aligned_dataframe import load_aligned_dataframe, load_word_frames
+from archive.kaggle_lip_reading.aligned_dataframe import (
+    load_aligned_dataframe,
+    load_word_frames,
+)
 from models.valente.model import LipNet, ctc_greedy_decode, tokens_to_text
+
+
+ARCHIVE_ROOT = Path(__file__).resolve().parents[2]
 
 
 def parse_args() -> argparse.Namespace:
@@ -31,7 +37,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test-size", type=float, default=0.2)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--device", type=str, default=None)
-    parser.add_argument("--out-dir", type=Path, default=Path("checkpoints"))
+    parser.add_argument(
+        "--out-dir", type=Path, default=ARCHIVE_ROOT / "checkpoints"
+    )
     return parser.parse_args()
 
 
