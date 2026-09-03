@@ -4,10 +4,13 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+import sys
 
 import numpy as np
 
+sys.modules["ultralytics"] = SimpleNamespace(YOLO=object)
 from gesture_detector import GestureEvaluator
+sys.modules.pop("ultralytics", None)
 
 
 class FakeBoxes:

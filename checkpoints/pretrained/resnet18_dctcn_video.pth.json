@@ -1,0 +1,7 @@
+{
+  "name": "resnet18_dctcn_video",
+  "source": "https://github.com/mpc001/Lipreading_using_Temporal_Convolutional_Networks#model-zoo",
+  "download_file_id": "179NgMsHo9TeZCLLtNWFVgRehDvzteMZE",
+  "sha256": "806ea23bc082a9c8a3c08aafbc1cab0f0f8aaeef70a4c824989ebd17bf245b5f",
+  "license": "Upstream non-commercial comparative/benchmarking use only"
+}

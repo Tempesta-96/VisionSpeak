@@ -17,6 +17,14 @@ hello, hi, yes, no, good, bad, thanks, bye
    custom CTC experiment in `models/valente/custom_word_training.ipynb`.
 4. Test a trained checkpoint with `webcam_custom_word_detection.ipynb`.
 
+For a single webcam interface that can switch between custom lip reading and
+YOLO gesture recognition, use `combinedVisionSpeak.ipynb`. Its OpenCV window
+uses these controls:
+
+- `Space`: record and classify one three-second lip clip.
+- `M`: switch between lip and gesture modes.
+- `Q`: quit the combined session.
+
 The recorded dataset is stored under `data/custom_words/`. Each accepted clip
 contains grayscale mouth frames with shape `(time, 50, 100)` and is indexed by
 `data/custom_words/manifest.csv`.
@@ -38,13 +46,31 @@ The reusable model architectures in `models/LBY/model.py` and
 `models/valente/model.py` remain active because the custom-word workflows use
 them too.
 
-## Environment
+## Environments
 
-Install the dependencies into a dedicated environment:
+MediaPipe and Ultralytics depend on different OpenCV wheel distributions. Keep
+them in separate environments to avoid loading two incompatible `cv2` packages
+into one Python process.
+
+Create the lip-reading/MediaPipe environment and use it as the Jupyter kernel:
 
 ```bash
-pip install -r requirements.txt
+python3.11 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m ipykernel install --user --name visionspeak-lip --display-name "VisionSpeak Lip"
 ```
 
-The project intentionally uses `opencv-contrib-python` rather than installing
-both OpenCV wheel variants in one environment.
+Create the isolated YOLO worker environment:
+
+```bash
+python3.11 -m venv .venv-yolo
+.venv-yolo/bin/python -m pip install -r requirements-yolo.txt
+```
+
+On Windows, use `.venv\Scripts\python.exe` and
+`.venv-yolo\Scripts\python.exe` in place of the `bin/python` paths. The
+combined notebook automatically discovers both layouts, and its configuration
+cell also accepts explicit interpreter paths.
+
+Do not install `requirements.txt` and `requirements-yolo.txt` into the same
+environment.

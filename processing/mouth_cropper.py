@@ -3,10 +3,9 @@
 from pathlib import Path
 
 import cv2
-import mediapipe as mp
 import numpy as np
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
+
+from processing.mediapipe_compat import mp, python, vision
 
 
 class MouthCropper:
@@ -67,6 +66,10 @@ class MouthCropper:
             self._landmarker = None
             self._last_crop_box = None
 
+    def reset_tracking(self) -> None:
+        """Forget the last mouth box before starting a new isolated clip."""
+        self._last_crop_box = None
+
     def _detect_landmarks(self, frame: np.ndarray, timestamp_ms: int):
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
@@ -82,8 +85,12 @@ class MouthCropper:
         y1 = (height - side) // 2
         return frame[y1 : y1 + side, x1 : x1 + side]
 
-    def crop(self, frame: np.ndarray, timestamp_ms: int) -> np.ndarray:
-        """Return the mouth region of ``frame`` resized to ``target_size``."""
+    def crop_with_metadata(
+        self,
+        frame: np.ndarray,
+        timestamp_ms: int,
+    ) -> tuple[np.ndarray, tuple[int, int, int, int] | None, bool]:
+        """Return a crop, its box, and whether this frame had a fresh detection."""
         if self._landmarker is None:
             raise RuntimeError(
                 "MouthCropper is not open; call open() or use a context manager."
@@ -91,6 +98,7 @@ class MouthCropper:
 
         crop_box = self._last_crop_box
         landmarks = self._detect_landmarks(frame, timestamp_ms)
+        fresh_detection = landmarks is not None
         if landmarks is not None:
             height, width = frame.shape[:2]
             lip_points = np.array(
@@ -121,6 +129,8 @@ class MouthCropper:
             if x2 > x1 and y2 > y1:
                 crop_box = (x1, y1, x2, y2)
                 self._last_crop_box = crop_box
+            else:
+                fresh_detection = False
 
         if crop_box is None:
             cropped = self._center_crop(frame)
@@ -128,4 +138,10 @@ class MouthCropper:
             x1, y1, x2, y2 = crop_box
             cropped = frame[y1:y2, x1:x2]
 
-        return cv2.resize(cropped, self.target_size)
+        resized = cv2.resize(cropped, self.target_size)
+        return resized, crop_box, fresh_detection
+
+    def crop(self, frame: np.ndarray, timestamp_ms: int) -> np.ndarray:
+        """Return the mouth region of ``frame`` resized to ``target_size``."""
+        cropped, _, _ = self.crop_with_metadata(frame, timestamp_ms)
+        return cropped

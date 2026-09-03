@@ -1,0 +1,8 @@
+# VisionSpeak YOLO gesture-worker dependencies
+# Install this file in .venv-yolo, never in the MediaPipe/lip environment.
+numpy<2
+opencv-python==4.11.0.86
+matplotlib
+torch
+ultralytics>=8.4,<9
+ipykernel
