@@ -6,7 +6,10 @@ import zipfile
 
 import numpy as np
 
-from aligned_dataframe import load_aligned_dataframe
+from archive.kaggle_lip_reading.aligned_dataframe import load_aligned_dataframe
+
+
+ARCHIVE_ROOT = Path(__file__).resolve().parent
 
 
 REQUIRED_ARCHIVE_KEYS = {
@@ -31,7 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--processed-dir",
         type=Path,
-        default=Path("data/lips-dataset/processedData"),
+        default=ARCHIVE_ROOT / "data/lips-dataset/processedData",
         help="Directory containing .npz files and aligned_words.csv.",
     )
     return parser.parse_args()

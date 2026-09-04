@@ -21,6 +21,7 @@ import numpy as np
 
 from processing.mouth_cropper import MouthCropper
 
+ARCHIVE_ROOT = Path(__file__).resolve().parent
 SAMPLE_RATE_HZ = 25000
 VIDEO_FPS = 25
 TIME_UNITS_PER_FRAME = SAMPLE_RATE_HZ / VIDEO_FPS
@@ -68,19 +69,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--video-dir",
         type=Path,
-        default=Path("data/lips-dataset/s1"),
+        default=ARCHIVE_ROOT / "data/lips-dataset/s1",
         help="Directory containing the .mpg video files.",
     )
     parser.add_argument(
         "--align-dir",
         type=Path,
-        default=Path("data/lips-dataset/alignments/s1"),
+        default=ARCHIVE_ROOT / "data/lips-dataset/alignments/s1",
         help="Directory containing the .align alignment files.",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("data/lips-dataset/processedData"),
+        default=ARCHIVE_ROOT / "data/lips-dataset/processedData",
         help="Directory where the .npz files are written.",
     )
     parser.add_argument(

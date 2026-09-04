@@ -13,12 +13,12 @@ from unittest.mock import patch
 import numpy as np
 import torch
 
-from models.LBY import predict
+from archive.kaggle_lip_reading.models.LBY import predict
 
 
-ROOT = Path(__file__).resolve().parents[1]
-CHECKPOINT_PATH = ROOT / "checkpoints" / "best.pt"
-PROCESSED_DIR = ROOT / "data" / "lips-dataset" / "processedData"
+ARCHIVE_ROOT = Path(__file__).resolve().parents[1]
+CHECKPOINT_PATH = ARCHIVE_ROOT / "checkpoints" / "best.pt"
+PROCESSED_DIR = ARCHIVE_ROOT / "data" / "lips-dataset" / "processedData"
 SAMPLE_ARCHIVE = next(PROCESSED_DIR.glob("*.npz"), None)
 
 

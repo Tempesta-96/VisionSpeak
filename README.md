@@ -1,94 +1,76 @@
 # VisionSpeak
 
-VisionSpeak is a lightweight multimodal text transcription prototype that routes video input through a simple processing pipeline for lip-reading or hand-gesture recognition.
+VisionSpeak is a multimodal computer-vision prototype for converting visible
+lip movements and hand gestures into text.
 
-## Current pipeline
+## Active lip-reading workflow
 
-```text
-main.py
-  -> video_loader.py
-  -> preprocessor.py
-  -> modality_classifier.py
-  -> lip_pipeline.py / gesture_pipeline.py
-  -> postprocessor.py
-  -> final text output
-```
-
-## Project structure
+The active lip-reading experiments recognise these eight isolated words:
 
 ```text
-VisionSpeak/
-├── Dockerfile
-├── README.md
-├── main.py
-├── requirements.txt
-└── processing/
-    ├── gesture_pipeline.py
-    ├── lip_pipeline.py
-    ├── modality_classifier.py
-    ├── postprocessor.py
-    ├── preprocessor.py
-    └── video_loader.py
+hello, hi, yes, no, good, bad, thanks, bye
 ```
 
-## Local run
+1. Record mouth-only training clips with `record_custom_word_dataset.ipynb`.
+2. Load and split those clips with `custom_words_dataset.py`.
+3. Train the isolated-word classifier with `train_custom_words.py`, or use the
+   custom CTC experiment in `models/valente/custom_word_training.ipynb`.
+4. Test a trained checkpoint with `webcam_custom_word_detection.ipynb`.
 
-Install dependencies:
+For a single webcam interface that can switch between custom lip reading and
+YOLO gesture recognition, use `combinedVisionSpeak.ipynb`. Its OpenCV window
+uses these controls:
+
+- `Space`: record and classify one three-second lip clip.
+- `M`: switch between lip and gesture modes.
+- `Q`: quit the combined session.
+
+The recorded dataset is stored under `data/custom_words/`. Each accepted clip
+contains grayscale mouth frames with shape `(time, 50, 100)` and is indexed by
+`data/custom_words/manifest.csv`.
+
+## Hand-gesture workflows
+
+- `gesture_detector.py` and `models/Lawrence/main_yolo8n.ipynb` contain the
+  YOLOv8 gesture detector.
+- `models/SX/` contains the MediaPipe-landmark LSTM experiment.
+
+## Legacy GRID/Kaggle workflow
+
+The original GRID dataset experiments, dataset files, scripts, checkpoints,
+tests, and notebook cells have been moved to
+`archive/kaggle_lip_reading/`. See its README for the archived layout and
+commands.
+
+The reusable model architectures in `models/LBY/model.py` and
+`models/valente/model.py` remain active because the custom-word workflows use
+them too.
+
+## Environments
+
+MediaPipe and Ultralytics depend on different OpenCV wheel distributions. Keep
+them in separate environments to avoid loading two incompatible `cv2` packages
+into one Python process.
+
+Create the lip-reading/MediaPipe environment and use it as the Jupyter kernel:
 
 ```bash
-pip install -r requirements.txt
+python3.11 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m ipykernel install --user --name visionspeak-lip --display-name "VisionSpeak Lip"
 ```
 
-Run with an MP4 file:
+Create the isolated YOLO worker environment:
 
 ```bash
-python main.py --source mp4 --video-path sample_video.mp4 \
-  --checkpoint checkpoints/valente_lipnet_ctc.pt
+python3.11 -m venv .venv-yolo
+.venv-yolo/bin/python -m pip install -r requirements-yolo.txt
 ```
 
-If no arguments are supplied, VisionSpeak uses the included GRID sample
-`data/lips-dataset/s1/bbaf2n.mpg` and the trained Valente checkpoint. The video
-is mouth-cropped, resized to `100x50`, converted to grayscale, normalised using
-the training procedure, and decoded into text with CTC greedy decoding:
+On Windows, use `.venv\Scripts\python.exe` and
+`.venv-yolo\Scripts\python.exe` in place of the `bin/python` paths. The
+combined notebook automatically discovers both layouts, and its configuration
+cell also accepts explicit interpreter paths.
 
-```bash
-python main.py
-```
-
-Run with webcam:
-
-```bash
-python main.py --source webcam
-```
-
-Press `q` to exit the webcam preview window.
-
-## Prepare the GRID lip-reading data
-
-The GRID data lives under `data/lips-dataset/` with `s1/*.mpg` videos and
-`alignments/s1/*.align` word timestamps. From this directory, align them:
-
-```bash
-python align_videos.py --crop-mouth --grayscale --verbose
-```
-
-`--crop-mouth` crops and resizes each frame to the speaker's mouth region
-(default `100x50`, override with `--mouth-size WxH`).
-
-This writes one archive per video plus `data/lips-dataset/processedData/aligned_words.csv`.
-The CSV uses one row per spoken word; `end_frame` is exclusive.
-
-Load the lightweight timing index as a DataFrame and retrieve pixels lazily:
-
-```python
-from aligned_dataframe import load_aligned_dataframe, load_word_frames
-
-aligned_words = load_aligned_dataframe()
-first_word_frames = load_word_frames(aligned_words.iloc[0])
-```
-
-Validate all generated archives and their timing metadata:
-
-```bash
-python validate_processed_data.py
-```
+Do not install `requirements.txt` and `requirements-yolo.txt` into the same
+environment.

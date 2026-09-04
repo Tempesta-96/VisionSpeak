@@ -155,6 +155,7 @@ activemq-data/
 .env
 .envrc
 .venv
+.venv-yolo/
 env/
 venv/
 ENV/
@@ -221,5 +222,9 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# dataset that was downloaded
-data/lips-dataset
+# Large downloaded datasets and archived generated data
+data/lips-dataset/
+archive/kaggle_lip_reading/data/lips-dataset/
+
+# Third-party pretrained weights: re-download via the .json sidecar metadata
+checkpoints/pretrained/*.pth

@@ -19,7 +19,8 @@ from processing.preprocessor import Preprocessor
 from processing.video_loader import VideoLoader
 
 
-DEFAULT_CHECKPOINT_PATH = Path("checkpoints/best.pt")
+ARCHIVE_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_CHECKPOINT_PATH = ARCHIVE_ROOT / "checkpoints/best.pt"
 FRAME_HEIGHT = 50
 FRAME_WIDTH = 100
 

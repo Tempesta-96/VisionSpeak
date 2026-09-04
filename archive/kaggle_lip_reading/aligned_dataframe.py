@@ -6,9 +6,11 @@ from typing import Mapping
 import numpy as np
 import pandas as pd
 
+ARCHIVE_ROOT = Path(__file__).resolve().parent
+
 
 def load_aligned_dataframe(
-    processed_dir: str | Path = "data/lips-dataset/processedData",
+    processed_dir: str | Path = ARCHIVE_ROOT / "data/lips-dataset/processedData",
 ) -> pd.DataFrame:
     """Load one row per spoken word without loading video arrays into memory.
 

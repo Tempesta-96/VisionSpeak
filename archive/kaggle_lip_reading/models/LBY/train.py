@@ -8,8 +8,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from dataset import get_word_classification_dataloaders
+from archive.kaggle_lip_reading.dataset import get_word_classification_dataloaders
 from models.LBY.model import LipReadingClassifier
+
+
+ARCHIVE_ROOT = Path(__file__).resolve().parents[2]
 
 
 def parse_args() -> argparse.Namespace:
@@ -26,7 +29,9 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="cpu, cuda or mps (auto-detected if unset).",
     )
-    parser.add_argument("--out-dir", type=Path, default=Path("checkpoints"))
+    parser.add_argument(
+        "--out-dir", type=Path, default=ARCHIVE_ROOT / "checkpoints"
+    )
     parser.add_argument("--num-workers", type=int, default=0)
     return parser.parse_args()
 
