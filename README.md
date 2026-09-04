@@ -42,7 +42,17 @@ pip install -r requirements.txt
 Run with an MP4 file:
 
 ```bash
-python main.py --source mp4 --video-path sample_video.mp4
+python main.py --source mp4 --video-path sample_video.mp4 \
+  --checkpoint checkpoints/valente_lipnet_ctc.pt
+```
+
+If no arguments are supplied, VisionSpeak uses the included GRID sample
+`data/lips-dataset/s1/bbaf2n.mpg` and the trained Valente checkpoint. The video
+is mouth-cropped, resized to `100x50`, converted to grayscale, normalised using
+the training procedure, and decoded into text with CTC greedy decoding:
+
+```bash
+python main.py
 ```
 
 Run with webcam:

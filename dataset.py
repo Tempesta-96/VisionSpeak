@@ -116,6 +116,7 @@ class LipReadingDataset(Dataset):
         row = self.dataframe.iloc[index]
         frames = load_word_frames(row)  # (T, H, W) uint8
         tensor = torch.from_numpy(np.asarray(frames)).float() / 255.0
+        tensor = (tensor - tensor.mean()) / (tensor.std() + 1e-6)
         tensor = tensor.unsqueeze(1)  # (T, 1, H, W)
 
         if self.transform is not None:
