@@ -67,6 +67,12 @@ def load_model(
 
 def prepare_frames(frames: np.ndarray) -> torch.Tensor:
     """Normalise grayscale frames in the same way as sentence training."""
+    if frames.size == 0:
+        raise ValueError("Cannot predict an empty video.")
+    if frames.ndim != 3:
+        raise ValueError(
+            f"Expected frames shaped [time, height, width], got {frames.shape}."
+        )
     tensor = torch.from_numpy(frames.astype(np.float32) / 255.0)
     tensor = (tensor - tensor.mean()) / (tensor.std() + 1e-6)
     return tensor.unsqueeze(0).unsqueeze(2)
@@ -98,6 +104,8 @@ def predict_from_video_file(
     blank_index: int,
     device: torch.device,
 ) -> str:
+    if not video_path.is_file():
+        raise FileNotFoundError(f"Video not found: {video_path}")
     loader = VideoLoader()
     preprocessor = Preprocessor()
     video_data = preprocessor.convert_to_greyscale(loader.load(str(video_path)))
