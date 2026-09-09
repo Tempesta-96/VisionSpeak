@@ -27,6 +27,7 @@ def run_live(detector) -> str:
 
             frame = cv2.flip(frame, 1)
             gesture_name, confidence, result_frame = detector.predict_frame(frame)
+            cv2.rectangle(result_frame, (10, 8), (410, 48), (24, 24, 24), -1)
             cv2.putText(
                 result_frame,
                 "GESTURE MODE | M lip | Q quit",
@@ -36,6 +37,13 @@ def run_live(detector) -> str:
                 (255, 255, 255),
                 2,
                 cv2.LINE_AA,
+            )
+            cv2.rectangle(
+                result_frame,
+                (10, result_frame.shape[0] - 48),
+                (350, result_frame.shape[0] - 8),
+                (24, 24, 24),
+                -1,
             )
             cv2.putText(
                 result_frame,
