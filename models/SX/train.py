@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import random
+from contextlib import nullcontext
 from pathlib import Path
 
 import cv2
@@ -29,17 +30,47 @@ def get_device(preferred: str | None = None) -> torch.device:
     return torch.device("cpu")
 
 
+def extract_body_pose_from_rgb(
+    rgb: np.ndarray,
+    pose=None,
+) -> np.ndarray:
+    """Convert an RGB image into a flattened body pose landmark vector."""
+    owns_pose = pose is None
+    detector = pose or mp.solutions.pose.Pose(
+        static_image_mode=True,
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5,
+    )
+    try:
+        results = detector.process(rgb)
+    finally:
+        if owns_pose:
+            detector.close()
+
+    pose_dim = 99
+    body_vector = np.zeros(pose_dim, dtype=np.float32)
+
+    if results.pose_landmarks:
+        coords = []
+        for landmark in results.pose_landmarks.landmark:
+            coords.extend([landmark.x, landmark.y, landmark.z])
+        body_vector = np.asarray(coords[:pose_dim], dtype=np.float32)
+        if body_vector.shape[0] < pose_dim:
+            pad = np.zeros(pose_dim - body_vector.shape[0], dtype=np.float32)
+            body_vector = np.concatenate([body_vector, pad])
+
+    return body_vector
+
+
 def extract_hand_landmarks_from_image(
     image_path: Path,
     two_hands: bool = True,
     sequence_length: int = 1,
     hands=None,
+    use_body_pose: bool = False,
+    pose=None,
 ) -> np.ndarray:
-    """Convert one image into a flattened landmark vector sequence.
-
-    For the first version, each image is treated as a single-frame sequence and
-    repeated or padded to the configured sequence length.
-    """
+    """Convert one image into a flattened landmark vector sequence."""
     image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
     if image is None:
         raise FileNotFoundError(f"Failed to read image: {image_path}")
@@ -58,27 +89,39 @@ def extract_hand_landmarks_from_image(
         if owns_hands:
             detector.close()
 
-    feature_dim = 126 if two_hands else 63
+    hand_output_dim = 126 if two_hands else 63
+    feature_dim = hand_output_dim + (99 if use_body_pose else 0)
     sequence = np.zeros((sequence_length, feature_dim), dtype=np.float32)
+    hand_vector = np.zeros(hand_output_dim, dtype=np.float32)
 
-    if not results.multi_hand_landmarks:
-        return sequence
+    if results.multi_hand_landmarks:
+        hand_vectors: list[np.ndarray] = []
+        for hand in results.multi_hand_landmarks[:2]:
+            coords = []
+            for landmark in hand.landmark:
+                coords.extend([landmark.x, landmark.y, landmark.z])
+            hand_vectors.append(np.asarray(coords, dtype=np.float32))
 
-    hand_vectors: list[np.ndarray] = []
-    for hand in results.multi_hand_landmarks[:2]:
-        coords = []
-        for landmark in hand.landmark:
-            coords.extend([landmark.x, landmark.y, landmark.z])
-        hand_vectors.append(np.asarray(coords, dtype=np.float32))
+        while len(hand_vectors) < 2 and two_hands:
+            hand_vectors.append(np.zeros(63, dtype=np.float32))
 
-    while len(hand_vectors) < 2 and two_hands:
-        hand_vectors.append(np.zeros(63, dtype=np.float32))
+        if two_hands:
+            combined = np.concatenate(hand_vectors[:2], axis=0)
+        else:
+            combined = hand_vectors[0] if hand_vectors else np.zeros(63, dtype=np.float32)
+        combined = combined.astype(np.float32)
+        combined = combined[:hand_output_dim]
+        if combined.shape[0] < hand_output_dim:
+            pad = np.zeros(hand_output_dim - combined.shape[0], dtype=np.float32)
+            combined = np.concatenate([combined, pad])
+        hand_vector = combined
 
-    if two_hands:
-        combined = np.concatenate(hand_vectors[:2], axis=0)
+    if use_body_pose:
+        body_vector = extract_body_pose_from_rgb(rgb, pose=pose)
+        combined = np.concatenate([hand_vector, body_vector], axis=0)
     else:
-        combined = hand_vectors[0] if hand_vectors else np.zeros(63, dtype=np.float32)
-    combined = combined.astype(np.float32)
+        combined = hand_vector
+
     combined = combined[:feature_dim]
     if combined.shape[0] < feature_dim:
         pad = np.zeros(feature_dim - combined.shape[0], dtype=np.float32)
@@ -93,18 +136,31 @@ def cache_landmarks(
     cache_dir: Path,
     two_hands: bool = True,
     sequence_length: int = 1,
+    use_body_pose: bool = False,
 ) -> tuple[int, int]:
     """Extract each image once and save features for fast repeated training."""
     cache_dir.mkdir(parents=True, exist_ok=True)
     detected = 0
     missing = 0
-    feature_dim = 126 if two_hands else 63
+    hand_output_dim = 126 if two_hands else 63
+    feature_dim = hand_output_dim + (99 if use_body_pose else 0)
+
+    pose_context = (
+        mp.solutions.pose.Pose(
+            static_image_mode=True,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
+        )
+        if use_body_pose
+        else nullcontext(None)
+    )
+
     with mp.solutions.hands.Hands(
         static_image_mode=True,
         max_num_hands=2 if two_hands else 1,
         min_detection_confidence=0.5,
         min_tracking_confidence=0.5,
-    ) as hands:
+    ) as hands, pose_context as pose:
         for image_path, _ in samples:
             class_cache_dir = cache_dir / image_path.parent.name.lower()
             class_cache_dir.mkdir(parents=True, exist_ok=True)
@@ -122,6 +178,8 @@ def cache_landmarks(
                 two_hands=two_hands,
                 sequence_length=sequence_length,
                 hands=hands,
+                use_body_pose=use_body_pose,
+                pose=pose,
             )
             np.savez_compressed(cache_path, features=features)
             if np.any(features):
@@ -139,12 +197,14 @@ class SignLanguageDataset(Dataset):
         two_hands: bool = True,
         sequence_length: int = 1,
         cache_dir: Path | None = None,
+        use_body_pose: bool = False,
     ) -> None:
         self.samples = samples
         self.class_to_idx = class_to_idx
         self.two_hands = two_hands
         self.sequence_length = sequence_length
-        self.feature_dim = 126 if two_hands else 63
+        self.use_body_pose = use_body_pose
+        self.feature_dim = (126 if two_hands else 63) + (99 if use_body_pose else 0)
         self.cache_dir = cache_dir
 
     def __len__(self) -> int:
@@ -160,6 +220,7 @@ class SignLanguageDataset(Dataset):
                 image_path,
                 two_hands=self.two_hands,
                 sequence_length=self.sequence_length,
+                use_body_pose=self.use_body_pose,
             )
 
         if features.shape[0] < self.sequence_length:
@@ -202,6 +263,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out-dir", type=Path, default=Path("checkpoints"))
     parser.add_argument("--two-hands", action="store_true", default=True, help="Use both hands with flattened 126-dimensional input.")
     parser.add_argument("--one-hand", dest="two_hands", action="store_false", help="Use one hand with 63-dimensional input.")
+    parser.add_argument(
+        "--use-body-pose",
+        action="store_true",
+        default=False,
+        help="Append MediaPipe body pose landmarks to the hand landmark vector.",
+    )
     return parser.parse_args()
 
 
@@ -231,18 +298,20 @@ def main() -> None:
         class_to_idx,
         two_hands=args.two_hands,
         sequence_length=args.sequence_length,
+        use_body_pose=args.use_body_pose,
     )
     valid_dataset = SignLanguageDataset(
         valid_samples,
         class_to_idx,
         two_hands=args.two_hands,
         sequence_length=args.sequence_length,
+        use_body_pose=args.use_body_pose,
     )
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
     valid_loader = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=False)
 
-    input_size = 126 if args.two_hands else 63
+    input_size = (126 if args.two_hands else 63) + (99 if args.use_body_pose else 0)
     model = HandSignLSTM(
         input_size=input_size,
         hidden_size=args.hidden_size,
