@@ -15,8 +15,9 @@ def extract_landmarks_from_image(
     image_path: str | Path,
     two_hands: bool = True,
     sequence_length: int = 1,
+    use_body_pose: bool = False,
 ) -> np.ndarray:
-    """Extract MediaPipe hand landmarks from an image as a sequence vector."""
+    """Extract MediaPipe hand and optional body landmarks as a sequence vector."""
     image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
     if image is None:
         raise FileNotFoundError(f"Could not read image: {image_path}")
@@ -28,38 +29,66 @@ def extract_landmarks_from_image(
         min_detection_confidence=0.5,
         min_tracking_confidence=0.5,
     )
+    pose = (
+        mp.solutions.pose.Pose(
+            static_image_mode=True,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
+        )
+        if use_body_pose
+        else None
+    )
     try:
         results = hands.process(rgb)
+        pose_results = pose.process(rgb) if pose is not None else None
     finally:
         hands.close()
+        if pose is not None:
+            pose.close()
 
-    feature_dim = 126 if two_hands else 63
+    hand_feature_dim = 126 if two_hands else 63
+    body_feature_dim = 99 if use_body_pose else 0
+    feature_dim = hand_feature_dim + body_feature_dim
     sequence = np.zeros((sequence_length, feature_dim), dtype=np.float32)
 
-    if not results.multi_hand_landmarks:
-        return sequence
+    hand_features = np.zeros(hand_feature_dim, dtype=np.float32)
+    if results.multi_hand_landmarks:
+        hand_vectors: list[np.ndarray] = []
+        for hand in results.multi_hand_landmarks[:2]:
+            coords = []
+            for landmark in hand.landmark:
+                coords.extend([landmark.x, landmark.y, landmark.z])
+            hand_vectors.append(np.asarray(coords, dtype=np.float32))
 
-    hand_vectors: list[np.ndarray] = []
-    for hand in results.multi_hand_landmarks[:2]:
-        coords = []
-        for landmark in hand.landmark:
-            coords.extend([landmark.x, landmark.y, landmark.z])
-        hand_vectors.append(np.asarray(coords, dtype=np.float32))
+        while len(hand_vectors) < 2 and two_hands:
+            hand_vectors.append(np.zeros(63, dtype=np.float32))
 
-    while len(hand_vectors) < 2 and two_hands:
-        hand_vectors.append(np.zeros(63, dtype=np.float32))
+        if two_hands:
+            combined_hands = np.concatenate(hand_vectors[:2], axis=0)
+        else:
+            combined_hands = hand_vectors[0] if hand_vectors else np.zeros(63, dtype=np.float32)
+        hand_features[:hand_feature_dim] = combined_hands[:hand_feature_dim]
 
-    if two_hands:
-        combined = np.concatenate(hand_vectors[:2], axis=0)
+    if use_body_pose:
+        body_features = np.zeros(body_feature_dim, dtype=np.float32)
+        if pose_results is not None and pose_results.pose_landmarks:
+            coords = []
+            for landmark in pose_results.pose_landmarks.landmark:
+                coords.extend([landmark.x, landmark.y, landmark.z])
+            body_values = np.asarray(coords[:body_feature_dim], dtype=np.float32)
+            body_features[:body_values.shape[0]] = body_values
+        features = np.concatenate([hand_features, body_features])
     else:
-        combined = hand_vectors[0] if hand_vectors else np.zeros(63, dtype=np.float32)
+        features = hand_features
 
-    combined = combined.astype(np.float32)
-    sequence[0, : combined.shape[0]] = combined[:feature_dim]
+    sequence[0, :] = features[:feature_dim]
     return sequence
 
 
-def load_checkpoint(checkpoint_path: Path, device: torch.device) -> tuple[HandSignLSTM, dict[str, int], int, bool]:
+def load_checkpoint(
+    checkpoint_path: Path,
+    device: torch.device,
+) -> tuple[HandSignLSTM, dict[str, int], int, bool, bool]:
     checkpoint = torch.load(checkpoint_path, map_location=device)
     model = HandSignLSTM(
         input_size=checkpoint.get("input_size", 126),
@@ -69,7 +98,13 @@ def load_checkpoint(checkpoint_path: Path, device: torch.device) -> tuple[HandSi
     ).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
-    return model, checkpoint["class_to_idx"], checkpoint.get("sequence_length", 1), checkpoint.get("two_hands", True)
+    return (
+        model,
+        checkpoint["class_to_idx"],
+        checkpoint.get("sequence_length", 1),
+        checkpoint.get("two_hands", True),
+        checkpoint.get("use_body_pose", False),
+    )
 
 
 @torch.no_grad()
@@ -79,9 +114,16 @@ def predict_image(
     device_name: str | None = None,
 ) -> str:
     device = torch.device(device_name or ("cuda" if torch.cuda.is_available() else "cpu"))
-    model, class_to_idx, sequence_length, two_hands = load_checkpoint(Path(checkpoint_path), device)
+    model, class_to_idx, sequence_length, two_hands, use_body_pose = load_checkpoint(
+        Path(checkpoint_path), device
+    )
 
-    features = extract_landmarks_from_image(image_path, two_hands=two_hands, sequence_length=sequence_length)
+    features = extract_landmarks_from_image(
+        image_path,
+        two_hands=two_hands,
+        sequence_length=sequence_length,
+        use_body_pose=use_body_pose,
+    )
     tensor = torch.from_numpy(features).unsqueeze(0).to(device)
     logits = model(tensor)
     prediction_index = int(torch.argmax(logits, dim=1).item())
