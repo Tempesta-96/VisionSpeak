@@ -14,7 +14,7 @@ import torch
 import torch.nn.functional as F
 
 from inference.protocol import EXIT_ERROR, EXIT_QUIT, EXIT_SWITCH
-from models.valente.model import LipNet
+from models.valente.model import architecture_from_checkpoint, build_lipnet
 from processing.mouth_cropper import MouthCropper
 
 
@@ -151,7 +151,12 @@ def clip_quality_message(
 
 
 class LipPredictor:
-    """Load the custom CTC checkpoint and score the fixed word vocabulary."""
+    """Load a CTC checkpoint and score the fixed word vocabulary.
+
+    The checkpoint's saved settings decide which temporal core is built, so the
+    original BiGRU checkpoints and the transformer replacements are both
+    supported without changes at the call site.
+    """
 
     def __init__(self, checkpoint_path: Path, device_name: str = "auto") -> None:
         self.device = choose_device(device_name)
@@ -165,11 +170,19 @@ class LipPredictor:
             if missing:
                 raise ValueError(f"Checkpoint cannot encode {word!r}: {sorted(missing)}")
 
-        self.model = LipNet(
+        self.architecture = architecture_from_checkpoint(checkpoint)
+        self.model = build_lipnet(
+            checkpoint,
             num_classes=len(self.char_to_index) + 1,
             input_channels=1,
         ).to(self.device)
-        self.model.load_state_dict(checkpoint["model_state_dict"])
+        try:
+            self.model.load_state_dict(checkpoint["model_state_dict"])
+        except RuntimeError as error:
+            raise ValueError(
+                f"{checkpoint_path.name} does not match its recorded "
+                f"architecture {self.architecture!r}: {error}"
+            ) from error
         self.model.eval()
 
     @torch.inference_mode()

@@ -17,6 +17,42 @@ hello, hi, yes, no, good, bad, thanks, bye
    custom CTC experiment in `models/valente/custom_word_training.ipynb`.
 4. Test a trained checkpoint with `webcam_custom_word_detection.ipynb`.
 
+### Temporal cores: BiGRU and transformer
+
+Both lip-reading models keep their convolutional frontend and expose a
+selectable temporal core, so accuracy differences can be attributed to
+attention versus recurrence rather than to a redesigned frontend:
+
+| Model | Core | Where |
+| --- | --- | --- |
+| `models/valente/model.py` (`LipNet`, CTC) | `bigru` \| `transformer` | `architecture=` argument or `build_lipnet(checkpoint, ...)` |
+| `models/LBY/model.py` (`LipReadingClassifier`) | `bigru` \| `transformer` | `architecture=` / `pooling=` argument |
+
+`bigru` remains the default, so checkpoints trained before this experiment load
+unchanged. A checkpoint records its own settings, and
+`inference/lip_worker.py` rebuilds whatever architecture the file declares — you
+do not tell the inference path which one it is loading.
+
+```bash
+# Transformer CTC experiment (default), then serve it through the webcam CLI
+.venv/bin/python train_custom_words.py --architecture transformer
+.venv/bin/python main.py --mode lip \
+    --lip-checkpoint checkpoints/custom_words.pt
+```
+
+The transformer path strides time by 2 in the *first* convolutional block only.
+That bound is not arbitrary: CTC requires `input_length >= 2 * target_length + 1`,
+the longest word is `thanks` (6 characters), and the shortest recorded clip is
+45 frames. The frontend must therefore leave at least 13 emissions, and it
+leaves 23. `tests/test_lip_transformer.py` re-derives that inequality from the
+manifest, so changing the stride fails the tests rather than silently breaking
+the loss.
+
+A note on reading the accuracy numbers: the default split in
+`custom_words_dataset.stratified_split` is per-clip random, so **all four
+speakers appear in both train and test**. Treat any accuracy from it as a
+same-speaker upper bound, not as evidence of generalisation.
+
 For a single webcam interface that can switch between custom lip reading and
 YOLO gesture recognition, use `combinedVisionSpeak.ipynb`. Its OpenCV window
 uses these controls:
@@ -74,3 +110,20 @@ cell also accepts explicit interpreter paths.
 
 Do not install `requirements.txt` and `requirements-yolo.txt` into the same
 environment.
+
+No new dependency is needed for the transformer cores: they use
+`torch.nn.TransformerEncoder`, which ships with the `torch` already pinned in
+both profiles.
+
+## Running the tests
+
+The suite uses `unittest`, and `tests/` is not an importable package root, so
+discover from inside it:
+
+```bash
+.venv/bin/python -m unittest discover -s tests -t tests
+```
+
+`tests/test_sx.py` currently fails to import because `inference/protocol.py`
+does not define `EXIT_BACKEND_SWITCH`, which `inference/sx_worker.py` imports.
+That predates the transformer work and is unrelated to it.
