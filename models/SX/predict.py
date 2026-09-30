@@ -8,7 +8,7 @@ import mediapipe as mp
 import numpy as np
 import torch
 
-from models.SX.model import HandSignLSTM
+from models.SX.inference import load_sx_checkpoint
 
 
 def extract_landmarks_from_image(
@@ -17,7 +17,13 @@ def extract_landmarks_from_image(
     sequence_length: int = 1,
     use_body_pose: bool = False,
 ) -> np.ndarray:
-    """Extract MediaPipe hand and optional body landmarks as a sequence vector."""
+    """Extract MediaPipe hand and optional body landmarks as a sequence vector.
+
+    ``sequence_length`` repeats the single observed pose so that windowed
+    models receive the shape they expect. With ``sequence_length > 1`` every
+    frame is identical, so this is only a shape adapter for still images; use a
+    recorded clip to exercise the temporal window meaningfully.
+    """
     image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
     if image is None:
         raise FileNotFoundError(f"Could not read image: {image_path}")
@@ -81,29 +87,28 @@ def extract_landmarks_from_image(
     else:
         features = hand_features
 
-    sequence[0, :] = features[:feature_dim]
+    # A still image has no temporal extent, so one pose fills the whole window.
+    sequence[:] = features[:feature_dim]
     return sequence
 
 
 def load_checkpoint(
     checkpoint_path: Path,
     device: torch.device,
-) -> tuple[HandSignLSTM, dict[str, int], int, bool, bool]:
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    model = HandSignLSTM(
-        input_size=checkpoint.get("input_size", 126),
-        hidden_size=checkpoint.get("hidden_size", 64),
-        num_layers=checkpoint.get("num_layers", 2),
-        num_classes=checkpoint.get("num_classes", len(checkpoint["class_to_idx"])),
-    ).to(device)
-    model.load_state_dict(checkpoint["model_state_dict"])
-    model.eval()
+) -> tuple[torch.nn.Module, dict[str, int], int, bool, bool]:
+    """Load the model a checkpoint declares, plus its input layout.
+
+    Returns ``(model, class_to_idx, sequence_length, two_hands, use_body_pose)``.
+    Delegates to :func:`models.SX.inference.load_sx_checkpoint` so this script
+    and the live worker agree on what a checkpoint means.
+    """
+    model, labels, config = load_sx_checkpoint(checkpoint_path, device)
     return (
         model,
-        checkpoint["class_to_idx"],
-        checkpoint.get("sequence_length", 1),
-        checkpoint.get("two_hands", True),
-        checkpoint.get("use_body_pose", False),
+        labels,
+        config.window_size,
+        config.two_hands,
+        config.use_body_pose,
     )
 
 
@@ -132,7 +137,7 @@ def predict_image(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Predict a hand-sign word from an image using a trained MediaPipe LSTM model.")
+    parser = argparse.ArgumentParser(description="Predict a hand-sign word from an image using a trained MediaPipe landmark model.")
     parser.add_argument("--checkpoint", type=Path, required=True, help="Path to checkpoint .pt file.")
     parser.add_argument("--image", type=Path, required=True, help="Path to the hand-sign image.")
     parser.add_argument(

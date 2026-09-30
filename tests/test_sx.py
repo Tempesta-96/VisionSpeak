@@ -34,6 +34,9 @@ class SXTests(unittest.TestCase):
             path=root/'checkpoints'/f'sx_hand_sign_cached_both_hands{suffix}.pt'
             model, labels, config = load_sx_checkpoint(path,torch.device('cpu'))
             self.assertEqual(config.input_size,size)
+            # Legacy checkpoints have no architecture key and must stay single-frame.
+            self.assertEqual(config.window_size,1)
+            self.assertEqual(config.architecture,'lstm')
             with torch.no_grad():
                 output=model(torch.zeros(1,1,size))
             self.assertEqual(output.shape,(1,18))
@@ -46,11 +49,32 @@ class SXTests(unittest.TestCase):
             detector.model.assert_not_called()
 
     def test_incompatible_metadata_and_sequences_rejected(self):
-        for checkpoint, message in [({'input_size':225,'two_hands':True,'use_body_pose':False},'metadata'),
-                                    ({'sequence_length':2},'sequence_length')]:
-            with patch('models.SX.inference.torch.load',return_value=checkpoint):
-                with self.assertRaisesRegex(ValueError,message):
-                    load_sx_checkpoint('unused',torch.device('cpu'))
+        base = {'model_state_dict': {}, 'class_to_idx': {'a': 0, 'b': 1}, 'num_classes': 2}
+        cases = [
+            ({'input_size': 225, 'two_hands': True, 'use_body_pose': False}, 'metadata'),
+            ({'sequence_length': 2}, 'window_size'),
+            ({'window_size': 4, 'sequence_length': 8}, 'disagree'),
+        ]
+        for overrides, message in cases:
+            checkpoint = {**base, **overrides}
+            with patch('models.SX.inference.torch.load', return_value=checkpoint):
+                with self.assertRaisesRegex(ValueError, message):
+                    load_sx_checkpoint('unused', torch.device('cpu'))
+
+    def test_malformed_checkpoints_rejected(self):
+        for checkpoint, message in [
+            (['not', 'a', 'mapping'], 'mapping'),
+            ({'class_to_idx': {'a': 0}}, 'model_state_dict'),
+            ({'model_state_dict': {}}, 'class_to_idx'),
+            ({'model_state_dict': {}, 'class_to_idx': {'a': 1}}, 'contiguous'),
+            (
+                {'model_state_dict': {}, 'class_to_idx': {'a': 0}, 'num_classes': 9},
+                'class count',
+            ),
+        ]:
+            with patch('models.SX.inference.torch.load', return_value=checkpoint):
+                with self.assertRaisesRegex(ValueError, message):
+                    load_sx_checkpoint('unused', torch.device('cpu'))
 
     def test_shared_image_extraction_matches_vector(self):
         hands=Mock(); hands.process.return_value=NS(multi_hand_landmarks=[landmarks(21,1)])
