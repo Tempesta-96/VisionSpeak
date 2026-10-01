@@ -98,6 +98,27 @@ training. The code, checkpoint handling, and live buffering are all exercised by
 `tests/test_gesture_transformer.py`, but no trained accuracy is reported here
 because the data is absent.
 
+### Read the first gesture accuracy with suspicion
+
+Two things will inflate whatever number this dataset produces, and both are
+worth fixing before the result is trusted:
+
+1. **Signer leakage.** `--data-dir` splits into `train`/`valid` folders, and
+   nothing prevents the same person appearing in both. On the lip-reading side
+   the equivalent per-clip split put all four speakers in train *and* test, and
+   a speaker-disjoint re-evaluation dropped the score to roughly chance. The
+   `transformer/lip-reading` branch has `speaker_disjoint_split()` in
+   `custom_words_dataset.py`; the same protocol should be applied here by
+   splitting on signer before any accuracy figure is quoted.
+2. **Synthetic windows.** Windows are built from still images, so they carry
+   jitter and scale drift rather than a real signing trajectory. A model can
+   score well on those and still fail on live motion, which is exactly what the
+   webcam loop provides.
+
+Recording real per-frame landmark clips and re-running with `--clips-dir`, plus
+a signer-disjoint split, are the two changes that would make the next reported
+number mean something.
+
 ## Legacy GRID/Kaggle workflow
 
 The original GRID dataset experiments, dataset files, scripts, checkpoints,
