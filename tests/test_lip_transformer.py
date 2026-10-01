@@ -271,6 +271,43 @@ class LipNetCTCTests(unittest.TestCase):
             logits = model(torch.randn(1, 90, *FRAME_SHAPE), torch.tensor([90]))
         self.assertEqual(logits.shape, (1, 45, 15))
 
+    def test_strided_length_formula_matches_real_conv_output(self) -> None:
+        """The predicted emission count must equal what the frontend produces.
+
+        If this drifts, CTC silently receives lengths that do not describe the
+        logits it is scoring.
+        """
+        conv = nn.Conv3d(
+            1, 2, kernel_size=(3, 5, 5), stride=(2, 2, 2), padding=(1, 2, 2)
+        )
+        with torch.inference_mode():
+            for frames in range(1, 40):
+                real = conv(torch.zeros(1, 1, frames, 32, 32)).shape[2]
+                predicted = strided_length(torch.tensor([frames]), 2).item()
+                self.assertEqual(
+                    predicted,
+                    real,
+                    f"frames={frames}: formula predicted {predicted}, conv gave {real}",
+                )
+
+    def test_emission_lengths_match_the_frontend_for_recorded_lengths(self) -> None:
+        """Check the whole stacked frontend, not just one conv layer."""
+        model = self._model("transformer").eval()
+        observed = sorted(set(custom_word_frame_counts()))
+        self.assertTrue(observed)
+        for frames in observed:
+            with torch.inference_mode():
+                logits = model(
+                    torch.randn(1, frames, *FRAME_SHAPE), torch.tensor([frames])
+                )
+            predicted = model.emission_lengths(torch.tensor([frames])).item()
+            self.assertEqual(
+                predicted,
+                logits.shape[1],
+                f"frames={frames}: predicted {predicted} emissions, "
+                f"frontend produced {logits.shape[1]}",
+            )
+
     def test_infer_input_lengths_reads_zero_padding(self) -> None:
         batch = torch.zeros(2, 60, *FRAME_SHAPE)
         batch[0] = torch.randn(60, *FRAME_SHAPE)
