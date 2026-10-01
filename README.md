@@ -50,8 +50,51 @@ the loss.
 
 A note on reading the accuracy numbers: the default split in
 `custom_words_dataset.stratified_split` is per-clip random, so **all four
-speakers appear in both train and test**. Treat any accuracy from it as a
-same-speaker upper bound, not as evidence of generalisation.
+speakers appear in both train and test**. Use `--speaker-holdout` for a number
+that means something:
+
+```bash
+# Hold out one speaker entirely; auto-picks the most representative speaker
+.venv/bin/python train_custom_words.py --architecture transformer --speaker-holdout
+
+# Or name the speaker
+.venv/bin/python train_custom_words.py --architecture bigru --speaker-holdout TestID
+```
+
+With `--speaker-holdout`, validation is drawn from the non-test speakers and the
+checkpoint is selected on it, so the held-out speaker never influences model
+choice.
+
+### Measured: the split matters more than the architecture
+
+Both cores, ~14 epochs on this CPU, holding out one speaker (384 train / 160
+test clips, 8 classes, so chance is 12.5%):
+
+| Core | Training accuracy | Test accuracy |
+| --- | --- | --- |
+| transformer | 0.15 → **0.27** | **0.26 peak**, ~0.13 typical |
+| bigru (cosine schedule) | 0.13, flat | 0.13, flat |
+| bigru (original MultiStepLR) | 0.13, flat | 0.13, flat |
+
+Read this carefully, because it is the most useful result on this branch and it
+is *not* "the transformer wins":
+
+- Under speaker-disjoint evaluation **both models are weak**. The task barely
+  generalises across signers with only 4 speakers, and one held-out speaker is a
+  small, noisy test set.
+- The BiGRU never escaped predicting a single class: it sat at exactly 0.125,
+  the majority-class rate, under both learning-rate schedules. It did not overfit
+  the training speakers either (training accuracy stayed at 0.13), so this is an
+  optimisation problem for this configuration rather than proof that recurrence
+  cannot represent the task.
+- The transformer did start fitting the training speakers (0.27) and briefly
+  cleared chance on the unseen speaker before its validation loss rose. That is
+  overfitting, not generalisation.
+
+The honest conclusion: architecture is not this project's bottleneck. With 640
+clips from 4 speakers, more capacity does not buy cross-signer accuracy. More
+speakers — and real video rather than still images and three-second clips — are
+what will move these numbers.
 
 For a single webcam interface that can switch between custom lip reading and
 YOLO gesture recognition, use `combinedVisionSpeak.ipynb`. Its OpenCV window

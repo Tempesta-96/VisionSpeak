@@ -24,7 +24,12 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from custom_words_dataset import get_custom_words_dataloaders
+from custom_words_dataset import (
+    available_speakers,
+    choose_holdout_speaker,
+    get_custom_words_dataloaders,
+    load_manifest,
+)
 from models.LBY.model import build_lip_reading_classifier
 
 EPOCHS = 80
@@ -59,6 +64,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=SEED)
     parser.add_argument("--checkpoint", type=Path, default=CHECKPOINT)
     parser.add_argument(
+        "--speaker-holdout",
+        nargs="?",
+        const="auto",
+        default=None,
+        metavar="SPEAKER",
+        help=(
+            "Evaluate speaker-disjoint: hold out one speaker entirely. Pass a "
+            "speaker id, or use the flag alone to auto-pick the most "
+            "representative one. Without it the default per-clip split leaks "
+            "speakers between train and test."
+        ),
+    )
+    parser.add_argument(
         "--legacy-milestones",
         action="store_true",
         help="Use the original MultiStepLR schedule instead of the transformer-friendly cosine one.",
@@ -73,11 +91,38 @@ def main() -> None:
     np.random.seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    train_loader, test_loader, label_to_index, index_to_label = (
-        get_custom_words_dataloaders(
-            test_size=0.2, seed=args.seed, batch_size=args.batch_size
+    holdout = args.speaker_holdout
+    if holdout == "auto":
+        holdout = choose_holdout_speaker(load_manifest())
+    elif holdout is not None:
+        known = available_speakers(load_manifest())
+        if holdout not in known:
+            raise SystemExit(f"Unknown speaker {holdout!r}. Available: {known}")
+
+    validation_loader = None
+    if holdout is None:
+        train_loader, test_loader, label_to_index, index_to_label = (
+            get_custom_words_dataloaders(
+                test_size=0.2,
+                seed=args.seed,
+                batch_size=args.batch_size,
+                speaker_holdout=None,
+            )
         )
-    )
+    else:
+        (
+            train_loader,
+            validation_loader,
+            test_loader,
+            label_to_index,
+            index_to_label,
+        ) = get_custom_words_dataloaders(
+            test_size=0.2,
+            seed=args.seed,
+            batch_size=args.batch_size,
+            speaker_holdout=holdout,
+            return_validation=True,
+        )
     num_classes = len(label_to_index)
 
     settings = {
@@ -95,6 +140,21 @@ def main() -> None:
     print(f"Train samples: {len(train_loader.dataset)}")
     print(f"Test samples: {len(test_loader.dataset)}")
     print(f"Classes: {num_classes} {label_to_index}")
+    if holdout is None:
+        test_speakers = sorted(set(test_loader.dataset.dataframe["speaker_id"].astype(str)))
+        print(f"Test speakers: {test_speakers}")
+        print(
+            "Split: per-clip random. Every speaker appears in BOTH train and "
+            "test, so this accuracy is a same-speaker upper bound. Re-run with "
+            "--speaker-holdout for a meaningful number."
+        )
+    else:
+        print(f"Split: speaker-disjoint, holding out {holdout!r} entirely.")
+        if validation_loader is not None:
+            print(
+                f"Validation samples: {len(validation_loader.dataset)} "
+                "(non-test speakers; used for checkpoint selection)"
+            )
 
     model = build_lip_reading_classifier(settings, num_classes=num_classes).to(device)
     print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
@@ -113,6 +173,11 @@ def main() -> None:
     criterion = nn.CrossEntropyLoss()
 
     args.checkpoint.parent.mkdir(parents=True, exist_ok=True)
+    # Select the checkpoint on validation when a speaker-disjoint validation
+    # split exists, so the held-out test speaker never influences model choice.
+    # Without one, fall back to test accuracy and say so.
+    selection_loader = validation_loader if validation_loader is not None else test_loader
+    selection_name = "valid" if validation_loader is not None else "test"
     best_accuracy = 0.0
 
     def run_epoch(loader, training):
@@ -134,28 +199,29 @@ def main() -> None:
 
     for epoch in range(1, args.epochs + 1):
         train_loss, train_acc = run_epoch(train_loader, training=True)
-        test_loss, test_acc = run_epoch(test_loader, training=False)
+        selection_loss, selection_acc = run_epoch(selection_loader, training=False)
         scheduler.step()
         print(
             f"Epoch {epoch:2d}/{args.epochs} | "
             f"train_loss {train_loss:.4f} train_acc {train_acc:.4f} | "
-            f"test_loss {test_loss:.4f} test_acc {test_acc:.4f} | "
+            f"{selection_name}_loss {selection_loss:.4f} {selection_name}_acc {selection_acc:.4f} | "
             f"lr {optimizer.param_groups[0]['lr']:.1e}"
         )
-        if test_acc > best_accuracy:
-            best_accuracy = test_acc
+        if selection_acc > best_accuracy:
+            best_accuracy = selection_acc
             torch.save(
                 {
                     "epoch": epoch,
                     "model_state_dict": model.state_dict(),
                     "label_to_index": label_to_index,
-                    "test_accuracy": test_acc,
+                    "selection_accuracy": selection_acc,
+                    "selection_split": selection_name,
                     **settings,
                 },
                 args.checkpoint,
             )
 
-    print(f"Best test accuracy: {best_accuracy:.4f}")
+    print(f"Best {selection_name} accuracy: {best_accuracy:.4f}")
 
     # ---- Final evaluation: per-word accuracy + confusion matrix ----
     checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
@@ -193,10 +259,17 @@ def main() -> None:
         row = " ".join(f"{v:4d}" for v in conf[i])
         print(f"{index_to_label[i]:>8} {row}")
 
-    print(
-        "\nNote: this split is per-clip random, so all four speakers appear in "
-        "both train and test. Treat the accuracy as a same-speaker upper bound."
-    )
+    if holdout is None:
+        print(
+            "\nNote: this split is per-clip random, so every speaker appears in "
+            "both train and test. Treat the accuracy as a same-speaker upper bound. "
+            "Re-run with --speaker-holdout for a generalisation number."
+        )
+    else:
+        print(
+            f"\nSpeaker-disjoint result: trained without {holdout!r} and tested only "
+            f"on it. This is the number that reflects generalisation to a new signer."
+        )
 
 
 if __name__ == "__main__":
