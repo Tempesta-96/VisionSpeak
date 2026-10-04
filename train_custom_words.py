@@ -16,13 +16,15 @@ it is looking at.
 """
 
 from __future__ import annotations
+import os
+os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
 
 import argparse
 from pathlib import Path
 
-import numpy as np
 import torch
 import torch.nn as nn
+import numpy as np
 
 from custom_words_dataset import (
     available_speakers,
