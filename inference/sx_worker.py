@@ -4,6 +4,7 @@ from collections import deque
 from contextlib import ExitStack
 from pathlib import Path
 import sys
+import time
 
 import cv2
 import numpy as np
@@ -11,7 +12,7 @@ import torch
 
 from inference.gesture_live import run_gesture_live
 from inference.protocol import EXIT_ERROR, EXIT_QUIT, EXIT_SWITCH, EXIT_BACKEND_SWITCH
-from models.SX.features import extract_rgb
+from models.SX.features import create_landmarker, extract_rgb, landmark_points
 from models.SX.inference import choose_device, load_sx_checkpoint
 
 
@@ -72,7 +73,8 @@ class FrameWindowBuffer:
 
 
 class SXDetector:
-    def __init__(self, checkpoint, camera_index=0, confidence=.5, device="auto"):
+    def __init__(self, checkpoint, camera_index=0, confidence=.5, device="auto",
+                 hand_model_path=None, pose_model_path=None):
         self.device = choose_device(device)
         self.model, labels, self.config = load_sx_checkpoint(checkpoint, self.device)
         self.labels = {v:k for k,v in labels.items()}
@@ -81,17 +83,18 @@ class SXDetector:
         self.window_name = "VisionSpeak - SX"
         self.camera = None
         self.resources = ExitStack()
+        self.hand_model_path = hand_model_path
+        self.pose_model_path = pose_model_path
+        self.last_timestamp_ms = -1
         self.buffer = FrameWindowBuffer(self.config.window_size, self.config.input_size)
 
     def open_camera(self):
-        from processing.mediapipe_compat import mp
         try:
-            self.hands = self.resources.enter_context(mp.solutions.hands.Hands(
-                static_image_mode=False, max_num_hands=2,
-                min_detection_confidence=.5, min_tracking_confidence=.5))
-            self.pose = self.resources.enter_context(mp.solutions.pose.Pose(
-                static_image_mode=True, min_detection_confidence=.5,
-                min_tracking_confidence=.5)) if self.config.use_body_pose else None
+            self.hands = self.resources.enter_context(create_landmarker(
+                "hand", video=True, model_path=self.hand_model_path))
+            self.pose = self.resources.enter_context(create_landmarker(
+                "pose", video=True, model_path=self.pose_model_path)) if self.config.use_body_pose else None
+            self.last_timestamp_ms = -1
             self.camera = cv2.VideoCapture(self.camera_index)
             return self.camera.isOpened()
         except Exception:
@@ -108,9 +111,10 @@ class SXDetector:
 
     @torch.inference_mode()
     def predict_frame(self, frame):
+        self.last_timestamp_ms = max(self.last_timestamp_ms + 1, time.monotonic_ns() // 1_000_000)
         vector, hands = extract_rgb(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
             two_hands=self.config.two_hands, use_body_pose=self.config.use_body_pose,
-            hands=self.hands, pose=self.pose)
+            hands=self.hands, pose=self.pose, timestamp_ms=self.last_timestamp_ms)
         label, confidence = "No hand detected", 0.
         if hands:
             self.buffer.append(vector)
@@ -125,8 +129,8 @@ class SXDetector:
         def render():
             preview = frame.copy()
             for hand in hands or []:
-                xs = [p.x * frame.shape[1] for p in hand.landmark]
-                ys = [p.y * frame.shape[0] for p in hand.landmark]
+                xs = [p.x * frame.shape[1] for p in landmark_points(hand)]
+                ys = [p.y * frame.shape[0] for p in landmark_points(hand)]
                 cv2.rectangle(preview, (max(0,int(min(xs))),max(0,int(min(ys)))),
                     (min(frame.shape[1]-1,int(max(xs))),min(frame.shape[0]-1,int(max(ys)))),
                     (0,255,255),2)
@@ -141,13 +145,17 @@ def main():
     parser.add_argument('--confidence', type=float, default=.5)
     parser.add_argument('--device', default='auto')
     parser.add_argument('--check-only', action='store_true')
+    parser.add_argument('--hand-model', type=Path, default=None)
+    parser.add_argument('--pose-model', type=Path, default=None)
     args = parser.parse_args()
     try:
-        from processing.mediapipe_compat import mp
-        if not hasattr(mp, 'solutions') or not all(hasattr(mp.solutions, name) for name in ('hands', 'pose')):
-            raise RuntimeError('Install requirements.txt in the shared environment; SX needs MediaPipe 0.10.21.')
-        detector = SXDetector(args.checkpoint,args.camera_index,args.confidence,args.device)
+        detector = SXDetector(args.checkpoint,args.camera_index,args.confidence,args.device,
+                              hand_model_path=args.hand_model, pose_model_path=args.pose_model)
         if args.check_only:
+            with ExitStack() as resources:
+                resources.enter_context(create_landmarker("hand", video=True, model_path=args.hand_model))
+                if detector.config.use_body_pose:
+                    resources.enter_context(create_landmarker("pose", video=True, model_path=args.pose_model))
             return EXIT_QUIT
         variant = 'hands + body' if detector.config.use_body_pose else 'hands only'
         action = run_gesture_live(detector,title=f'SX | {variant} | {args.checkpoint.name}')

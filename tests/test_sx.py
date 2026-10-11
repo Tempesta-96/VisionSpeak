@@ -109,17 +109,56 @@ class SXTests(unittest.TestCase):
         root=Path(__file__).resolve().parents[1]
         detector=SXDetector(root/'checkpoints/sx_hand_sign_cached_both_hands_body.pt',device='cpu')
         hands,pose=Mock(),Mock()
-        with patch('processing.mediapipe_compat.mp.solutions.hands.Hands') as hand_factory, \
-             patch('processing.mediapipe_compat.mp.solutions.pose.Pose') as pose_factory, \
+        with patch('inference.sx_worker.create_landmarker') as factory, \
              patch('cv2.VideoCapture') as camera, patch('cv2.destroyAllWindows'):
-            hand_factory.return_value.__enter__.return_value=hands
-            pose_factory.return_value.__enter__.return_value=pose
+            from unittest.mock import MagicMock
+            hand_context, pose_context = MagicMock(), MagicMock()
+            hand_context.__enter__.return_value = hands
+            pose_context.__enter__.return_value = pose
+            factory.side_effect = [hand_context, pose_context]
             camera.return_value.isOpened.return_value=False
             from inference.gesture_live import run_gesture_live
             self.assertEqual(run_gesture_live(detector,title='SX'),'error')
             camera.return_value.release.assert_called_once()
-            hand_factory.return_value.__exit__.assert_called_once()
-            pose_factory.return_value.__exit__.assert_called_once()
+            hand_context.__exit__.assert_called_once()
+            pose_context.__exit__.assert_called_once()
+
+    def test_tasks_video_features_and_timestamp(self):
+        class Detector:
+            def __init__(self, result):
+                self.result = result
+                self.calls = []
+
+            def detect_for_video(self, image, timestamp):
+                self.calls.append(timestamp)
+                return self.result
+
+        first, second = landmarks(21, 1).landmark, landmarks(21, 4).landmark
+        body = landmarks(33, 7).landmark
+        hands = Detector(NS(hand_landmarks=[first, second]))
+        pose = Detector(NS(pose_landmarks=[body]))
+        vector, detected = extract_rgb(np.zeros((50, 100, 3), np.uint8),
+            hands=hands, pose=pose, use_body_pose=True, timestamp_ms=123)
+        self.assertIs(detected, hands.result.hand_landmarks)
+        self.assertEqual(hands.calls, [123])
+        self.assertEqual(pose.calls, [123])
+        np.testing.assert_equal(vector, feature_vector(
+            [landmarks(21, 1), landmarks(21, 4)], landmarks(33, 7), use_body_pose=True))
+
+    def test_tasks_empty_detections_are_zero_filled(self):
+        class Detector:
+            def __init__(self, result):
+                self.result = result
+
+            def detect(self, image):
+                return self.result
+
+        vector, hands = extract_rgb(np.zeros((50, 100, 3), np.uint8),
+            hands=Detector(NS(hand_landmarks=[])),
+            pose=Detector(NS(pose_landmarks=[])), use_body_pose=True)
+        self.assertEqual(vector.shape, (225,))
+        self.assertFalse(vector.any())
+        self.assertEqual(hands, [])
 
 
 if __name__=='__main__':
