@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import tempfile
+import pickle
+import zipfile
 import unittest
 from pathlib import Path
 
@@ -8,6 +10,7 @@ from inference.launcher import (
     CombinedConfig,
     ConfigurationError,
     build_worker_command,
+    detect_gesture_backend,
     resolve_interpreter,
     run_combined_session,
     validate_combined_config,
@@ -30,6 +33,33 @@ class CombinedLauncherTests(unittest.TestCase):
             self.gesture_checkpoint,
         ):
             path.write_bytes(b"test")
+        self.write_checkpoint({"model": "ultralytics.nn.tasks.DetectionModel"})
+
+    def write_checkpoint(self, metadata):
+        with zipfile.ZipFile(self.gesture_checkpoint, "w") as archive:
+            archive.writestr("checkpoint/data.pkl", pickle.dumps(metadata, protocol=2))
+
+    def test_sx_uses_lip_environment_and_sx_worker(self):
+        self.write_checkpoint({"class_to_idx": {"yes": 0}, "model_state_dict": {}})
+        self.gesture_python.unlink()
+        resolved = validate_combined_config(self.config(), check_imports=False)
+        self.assertEqual(resolved.gesture_backend, "sx")
+        self.assertEqual(resolved.gesture_python, self.lip_python)
+        self.assertIn("inference.sx_worker", build_worker_command("gesture", resolved))
+
+    def test_unknown_and_ambiguous_checkpoint_rejected(self):
+        for metadata in ({"label_to_index": {}}, {
+            "class_to_idx": {}, "model_state_dict": {},
+            "model": "ultralytics.nn.tasks.DetectionModel",
+        }):
+            self.write_checkpoint(metadata)
+            with self.assertRaises(ConfigurationError):
+                detect_gesture_backend(self.gesture_checkpoint)
+
+    def test_corrupt_checkpoint_rejected(self):
+        self.gesture_checkpoint.write_bytes(b"invalid")
+        with self.assertRaises(ConfigurationError):
+            detect_gesture_backend(self.gesture_checkpoint)
 
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()

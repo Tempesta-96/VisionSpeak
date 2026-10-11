@@ -9,10 +9,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import os
+import pickletools
 from pathlib import Path
 import subprocess
 import sys
 import time
+import zipfile
 from typing import Callable
 
 from inference.protocol import EXIT_QUIT, EXIT_SWITCH, action_from_return_code
@@ -68,6 +70,7 @@ class ResolvedConfig:
     gesture_confidence: float
     lip_device: str
     gesture_device: str | None
+    gesture_backend: str = "yolo"
 
 
 @dataclass(frozen=True)
@@ -207,6 +210,33 @@ def _check_environment_imports(mode: str, interpreter: Path, project_root: Path)
         )
 
 
+def detect_gesture_backend(checkpoint: Path) -> str:
+    """Inspect Torch serialization metadata without executing pickle globals.
+
+    YOLO stores an Ultralytics model object; SX stores a state dictionary and
+    class mapping. Tensor data is not read and filenames do not select models.
+    """
+    try:
+        with zipfile.ZipFile(checkpoint) as archive:
+            entries = [name for name in archive.namelist() if name.endswith("/data.pkl") or name == "data.pkl"]
+            if len(entries) != 1:
+                raise ValueError("Expected one Torch data.pkl metadata entry.")
+            strings = set()
+            for opcode, argument, _ in pickletools.genops(archive.read(entries[0])):
+                if isinstance(argument, str) and opcode.name in (
+                    "UNICODE", "BINUNICODE", "SHORT_BINUNICODE", "BINUNICODE8", "GLOBAL",
+                ):
+                    strings.add(argument)
+        sx = {"class_to_idx", "model_state_dict"}.issubset(strings)
+        yolo = (bool({"model", "ema"}.intersection(strings))
+                and any(value.startswith("ultralytics.") for value in strings))
+        if sx != yolo:
+            return "sx" if sx else "yolo"
+        raise ValueError("Expected an SX class_to_idx/state-dict checkpoint or an Ultralytics model checkpoint.")
+    except (OSError, ValueError, zipfile.BadZipFile) as error:
+        raise ConfigurationError(f"Cannot identify gesture checkpoint {checkpoint.name}: {error}") from error
+
+
 def validate_combined_config(
     config: CombinedConfig,
     *,
@@ -228,7 +258,6 @@ def validate_combined_config(
         raise ConfigurationError("gesture_confidence must be between zero and one.")
 
     lip_python = resolve_interpreter("lip", config.lip_python, project_root)
-    gesture_python = resolve_interpreter("gesture", config.gesture_python, project_root)
     lip_checkpoint = _absolute_path(config.lip_checkpoint, project_root)
     gesture_checkpoint = _absolute_path(config.gesture_checkpoint, project_root)
 
@@ -238,9 +267,27 @@ def validate_combined_config(
             "Missing model checkpoint(s):\n  - " + "\n  - ".join(str(path) for path in missing)
         )
 
+    gesture_backend = detect_gesture_backend(gesture_checkpoint)
+    gesture_python = (lip_python if gesture_backend == "sx" else
+                      resolve_interpreter("gesture", config.gesture_python, project_root))
+
     if check_imports:
         _check_environment_imports("lip", lip_python, project_root)
-        _check_environment_imports("gesture", gesture_python, project_root)
+        if gesture_backend == "yolo":
+            _check_environment_imports("gesture", gesture_python, project_root)
+        else:
+            try:
+                result = subprocess.run(
+                    [str(lip_python), "-m", "inference.sx_worker", "--checkpoint",
+                     str(gesture_checkpoint), "--device", "cpu", "--check-only"],
+                    cwd=project_root, capture_output=True, text=True, timeout=60,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise ConfigurationError(f"Could not validate the SX checkpoint: {error}") from error
+            if result.returncode:
+                raise ConfigurationError("SX checkpoint or Tasks detector validation failed:\n" +
+                                         (result.stderr or result.stdout).strip())
 
     return ResolvedConfig(
         project_root=project_root,
@@ -258,6 +305,7 @@ def validate_combined_config(
         gesture_confidence=config.gesture_confidence,
         lip_device=config.lip_device,
         gesture_device=config.gesture_device,
+        gesture_backend=gesture_backend,
     )
 
 
@@ -289,7 +337,7 @@ def build_worker_command(mode: str, config: ResolvedConfig) -> list[str]:
     command = [
         str(config.gesture_python),
         "-m",
-        "inference.gesture_worker",
+        "inference.sx_worker" if config.gesture_backend == "sx" else "inference.gesture_worker",
         "--camera-index",
         str(config.camera_index),
         "--checkpoint",
