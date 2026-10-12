@@ -8,6 +8,9 @@ from enum import Enum
 EXIT_QUIT = 0
 EXIT_ERROR = 1
 EXIT_SWITCH = 10
+# Switch between the two gesture backends (YOLO and SX) without leaving
+# gesture mode. Emitted by inference.gesture_live on the ``G`` key.
+EXIT_BACKEND_SWITCH = 11
 
 
 class WorkerAction(str, Enum):

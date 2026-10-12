@@ -112,7 +112,91 @@ contains grayscale mouth frames with shape `(time, 50, 100)` and is indexed by
 
 - `gesture_detector.py` and `models/Lawrence/main_yolo8n.ipynb` contain the
   YOLOv8 gesture detector.
-- `models/SX/` contains the MediaPipe-landmark LSTM experiment.
+- `models/SX/` contains the MediaPipe-landmark experiment. It now has two
+  temporal cores:
+
+| Core | Model | Window |
+| --- | --- | --- |
+| `lstm` | `models/SX/model.py` (`HandSignLSTM`) | 1 frame |
+| `transformer` | `models/SX/transformer.py` (`GestureTransformer`) | any window |
+
+### The gesture model has no time axis by default
+
+Worth knowing before comparing the two cores. `models/SX/train.py` defaults to
+`--sequence-length 1` and the gesture sources are still images, so the LSTM is
+trained and served one frame at a time. It never observes motion, and attention
+over a single token is degenerate.
+
+`--window-size` (default 16) is what makes the transformer meaningful. Windows
+are synthesized from each still image: the pose is copied across the window,
+then per-frame jitter, landmark dropout, and a smooth scale drift are applied so
+the frames genuinely differ. That is enough for the model to exercise its time
+axis, but it does **not** invent a real gesture trajectory.
+
+```bash
+# Transformer over 16-frame windows
+.venv/bin/python -m models.SX.train \
+    --data-dir SuXin_TEMP/data --use-body-pose \
+    --architecture transformer --window-size 16
+
+# Original single-frame LSTM, unchanged
+.venv/bin/python -m models.SX.train \
+    --data-dir SuXin_TEMP/data --architecture lstm --window-size 1
+```
+
+`--clips-dir` accepts recorded per-frame landmark sequences (one `.npz` per
+sample holding a `frames` array of shape `(T, feature_dim)`). When a clip exists
+it is used instead of a synthesized window. Recording real gesture clips is the
+follow-up that actually raises accuracy; the synthetic window is a scaffold that
+makes the pipeline correct now.
+
+A window inherits the center frame's class label. If a window straddles a class
+boundary the label is approximate, which is acceptable at 16 frames but worth
+remembering.
+
+### Serving a windowed model
+
+`inference/sx_worker.py` keeps a rolling buffer of recent per-frame landmark
+vectors and classifies the newest frame in its temporal context. The buffer is
+cleared whenever no hand is detected, because stale frames describe a hand that
+is no longer present. Until the window fills, the newest real frame is repeated
+so predictions are available immediately rather than after `window_size` frames.
+
+A checkpoint declares its own architecture and window size, so the worker is
+told nothing and infers everything:
+
+```bash
+.venv/bin/python -m inference.sx_worker --checkpoint checkpoints/sx_hand_sign_best.pt
+```
+
+The gesture image data is **not** in this repository. `models/SX/train.py`
+expects `SuXin_TEMP/data/{train,valid}` split into per-class folders; the
+workflow notebook referenced a Windows path
+(`c:\Sean Su\NUS_Project\VisionSpeak\SuXin_TEMP\...`). Supply that folder before
+training. The code, checkpoint handling, and live buffering are all exercised by
+`tests/test_gesture_transformer.py`, but no trained accuracy is reported here
+because the data is absent.
+
+### Read the first gesture accuracy with suspicion
+
+Two things will inflate whatever number this dataset produces, and both are
+worth fixing before the result is trusted:
+
+1. **Signer leakage.** `--data-dir` splits into `train`/`valid` folders, and
+   nothing prevents the same person appearing in both. On the lip-reading side
+   the equivalent per-clip split put all four speakers in train *and* test, and
+   a speaker-disjoint re-evaluation dropped the score to roughly chance. The
+   `transformer/lip-reading` branch has `speaker_disjoint_split()` in
+   `custom_words_dataset.py`; the same protocol should be applied here by
+   splitting on signer before any accuracy figure is quoted.
+2. **Synthetic windows.** Windows are built from still images, so they carry
+   jitter and scale drift rather than a real signing trajectory. A model can
+   score well on those and still fail on live motion, which is exactly what the
+   webcam loop provides.
+
+Recording real per-frame landmark clips and re-running with `--clips-dir`, plus
+a signer-disjoint split, are the two changes that would make the next reported
+number mean something.
 
 ## Legacy GRID/Kaggle workflow
 
