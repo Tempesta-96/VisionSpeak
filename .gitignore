@@ -226,5 +226,8 @@ __marimo__/
 data/lips-dataset/
 archive/kaggle_lip_reading/data/lips-dataset/
 
+# Raw full-face videos from record_custom_word_dataset.ipynb (biometric data)
+data/custom_words/raw/
+
 # Third-party pretrained weights: re-download via the .json sidecar metadata
 checkpoints/pretrained/*.pth

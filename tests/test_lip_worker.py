@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import numpy as np
@@ -9,10 +11,18 @@ import torch
 from inference.lip_worker import (
     FRAME_HEIGHT,
     FRAME_WIDTH,
+    WORDS,
+    LipPredictor,
     clip_quality_message,
     prepare_clip,
     score_vocabulary,
     run_lip_webcam,
+)
+from models.valente.model import LipNet
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+LEGACY_CTC_CHECKPOINT = (
+    PROJECT_ROOT / "checkpoints" / "valente_custom_words_lipnet_ctc_0.852_acc.pt"
 )
 
 
@@ -111,6 +121,64 @@ class LipWorkerTests(unittest.TestCase):
         self.assertEqual(action, "quit")
         self.assertTrue(camera.released)
         destroy_windows.assert_called_once_with()
+
+
+class LipPredictorArchitectureTests(unittest.TestCase):
+    """The worker must serve both temporal cores from one code path."""
+
+    def _frames(self) -> np.ndarray:
+        generator = np.random.default_rng(0)
+        return (generator.random((60, FRAME_HEIGHT, FRAME_WIDTH)) * 255).astype(np.uint8)
+
+    def _write_transformer_checkpoint(self, path: Path, char_to_index: dict) -> None:
+        model = LipNet(num_classes=len(char_to_index) + 1, architecture="transformer")
+        with torch.inference_mode():
+            model(torch.zeros(1, 10, 1, FRAME_HEIGHT, FRAME_WIDTH), torch.tensor([10]))
+        torch.save(
+            {
+                "epoch": 1,
+                "model_state_dict": model.state_dict(),
+                "char_to_index": char_to_index,
+                "architecture": "transformer",
+                "hidden_size": 256,
+                "transformer_layers": 3,
+                "transformer_heads": 4,
+                "transformer_feedforward": 512,
+            },
+            path,
+        )
+
+    def test_legacy_checkpoint_still_loads_as_bigru(self) -> None:
+        predictor = LipPredictor(LEGACY_CTC_CHECKPOINT, "cpu")
+        self.assertEqual(predictor.architecture, "bigru")
+        prediction = predictor.predict(self._frames())
+        self.assertIn(prediction.label, WORDS)
+        self.assertAlmostEqual(sum(prediction.scores.values()), 1.0, places=5)
+
+    def test_transformer_checkpoint_selected_from_metadata(self) -> None:
+        legacy = LipPredictor(LEGACY_CTC_CHECKPOINT, "cpu")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "transformer_ctc.pt"
+            self._write_transformer_checkpoint(path, legacy.char_to_index)
+            predictor = LipPredictor(path, "cpu")
+
+        self.assertEqual(predictor.architecture, "transformer")
+        prediction = predictor.predict(self._frames())
+        self.assertIn(prediction.label, WORDS)
+        self.assertAlmostEqual(sum(prediction.scores.values()), 1.0, places=5)
+
+    def test_architecture_mismatch_reports_the_recorded_name(self) -> None:
+        legacy = LipPredictor(LEGACY_CTC_CHECKPOINT, "cpu")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "misdeclared.pt"
+            self._write_transformer_checkpoint(path, legacy.char_to_index)
+            checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+            # Weights are a transformer's but the metadata claims BiGRU.
+            checkpoint["architecture"] = "bigru"
+            torch.save(checkpoint, path)
+
+            with self.assertRaisesRegex(ValueError, "bigru"):
+                LipPredictor(path, "cpu")
 
 
 if __name__ == "__main__":

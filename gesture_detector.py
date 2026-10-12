@@ -3,12 +3,14 @@ YOLOv8 Hand Gesture Detection Class
 Provides reusable classes for training, testing, and real-time webcam gesture detection.
 """
 
-import cv2
-from pathlib import Path
-from ultralytics import YOLO
 import csv
 from collections import Counter
-from typing import Optional, Dict, Tuple
+from pathlib import Path
+from typing import Dict, Optional, Tuple
+
+import cv2
+import numpy as np
+from ultralytics import YOLO
 
 
 class GestureDetector:
@@ -312,6 +314,8 @@ class GestureEvaluator:
         class_names = getattr(self, "class_names", getattr(self.model, "names", {}))
         rows = []
         correct = 0
+        num_classes = len(class_names)
+        confusion_matrix = np.zeros((num_classes, num_classes), dtype=int)
 
         print(f"Evaluating {len(image_paths)} test images...")
         
@@ -348,6 +352,9 @@ class GestureEvaluator:
             is_correct = predicted_id == expected_id and predicted_id is not None
             correct += int(is_correct)
 
+            if expected_id is not None and predicted_id is not None:
+                confusion_matrix[expected_id, predicted_id] += 1
+
             rows.append({
                 "image": image_path.name,
                 "expected": class_names.get(expected_id, str(expected_id)) if expected_id is not None else "missing label",
@@ -366,12 +373,17 @@ class GestureEvaluator:
 
         result_counts = Counter(row["result"] for row in rows)
         accuracy = correct / len(rows) if rows else 0
-        
+        confusion_matrix_accuracy = (
+            np.trace(confusion_matrix) / confusion_matrix.sum() if confusion_matrix.sum() else 0.0
+        )
+
         metrics = {
             "total_images": len(rows),
             "correct": result_counts.get('RIGHT', 0),
             "wrong": result_counts.get('WRONG', 0),
             "accuracy": accuracy,
+            "confusion_matrix": confusion_matrix.tolist(),
+            "confusion_matrix_accuracy": float(confusion_matrix_accuracy),
             "report_path": str(self.output_dir / "gesture_results.csv")
         }
         
@@ -380,6 +392,9 @@ class GestureEvaluator:
         print(f"Correct:     {metrics['correct']}")
         print(f"Wrong:       {metrics['wrong']}")
         print(f"Accuracy:    {metrics['accuracy']:.2%}")
+        print("Confusion matrix metric:")
+        print(np.array(metrics["confusion_matrix"]))
+        print(f"Confusion-matrix accuracy: {metrics['confusion_matrix_accuracy']:.2%}")
         
         return metrics
 

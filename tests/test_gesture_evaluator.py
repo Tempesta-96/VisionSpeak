@@ -51,6 +51,8 @@ class GestureEvaluatorTests(unittest.TestCase):
             self.assertEqual(metrics["total_images"], 1)
             self.assertEqual(metrics["correct"], 1)
             self.assertEqual(metrics["wrong"], 0)
+            self.assertEqual(metrics["confusion_matrix"], [[1]])
+            self.assertAlmostEqual(metrics["confusion_matrix_accuracy"], 1.0)
             self.assertGreaterEqual(metrics["accuracy"], 0.0)
 
 
