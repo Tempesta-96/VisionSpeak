@@ -1,4 +1,4 @@
-"""MediaPipe + CTC webcam worker for the combined VisionSpeak notebook."""
+"""MediaPipe webcam worker with CTC and word-classification inference."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import torch
 import torch.nn.functional as F
 
 from inference.protocol import EXIT_ERROR, EXIT_QUIT, EXIT_SWITCH
-from models.valente.model import LipNet
+from models.valente.model import architecture_from_checkpoint, build_lipnet
 from processing.mouth_cropper import MouthCropper
 
 
@@ -67,8 +67,9 @@ def prepare_clip(
     frames: np.ndarray,
     *,
     max_frames: int = 90,
+    prediction_mode: str = "ctc",
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Prepare uint8 mouth frames exactly as the custom CTC training notebook."""
+    """Prepare mouth frames with the selected model family's standardisation."""
     source = np.asarray(frames)
     if source.dtype != np.uint8 or source.ndim != 3:
         raise ValueError("frames must be uint8 with shape (time, 50, 100).")
@@ -83,7 +84,13 @@ def prepare_clip(
 
     length = len(source)
     normalized = source.astype(np.float32) / 255.0
-    normalized = (normalized - normalized.mean()) / (normalized.std() + 1e-6)
+    if prediction_mode == "ctc":
+        normalized = (normalized - normalized.mean()) / (normalized.std() + 1e-6)
+    elif prediction_mode == "word_classification":
+        values = torch.from_numpy(normalized)
+        normalized = ((values - values.mean()) / (values.std() + 1e-6)).numpy()
+    else:
+        raise ValueError(f"Unsupported prediction mode: {prediction_mode!r}")
     padded = np.zeros((max_frames, FRAME_HEIGHT, FRAME_WIDTH), dtype=np.float32)
     padded[:length] = normalized
     tensor = torch.from_numpy(padded).unsqueeze(0).unsqueeze(2)
@@ -151,7 +158,12 @@ def clip_quality_message(
 
 
 class LipPredictor:
-    """Load the custom CTC checkpoint and score the fixed word vocabulary."""
+    """Load a CTC sequence model or an isolated-word classifier.
+
+    The checkpoint's saved settings decide which temporal core is built, so the
+    mapping selects Valente CTC scoring or LBY word probabilities without
+    changes at the call site.
+    """
 
     def __init__(self, checkpoint_path: Path, device_name: str = "auto") -> None:
         self.device = choose_device(device_name)
@@ -159,27 +171,49 @@ class LipPredictor:
             checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=True)
         except TypeError:
             checkpoint = torch.load(checkpoint_path, map_location=self.device)
-        self.char_to_index = {str(key): int(value) for key, value in checkpoint["char_to_index"].items()}
-        for word in WORDS:
-            missing = set(word).difference(self.char_to_index)
-            if missing:
-                raise ValueError(f"Checkpoint cannot encode {word!r}: {sorted(missing)}")
+        has_characters = "char_to_index" in checkpoint
+        has_labels = "label_to_index" in checkpoint
+        if has_characters == has_labels:
+            raise ValueError("Checkpoint must contain exactly one of char_to_index or label_to_index.")
+        self.prediction_mode = "ctc" if has_characters else "word_classification"
+        self.architecture = architecture_from_checkpoint(checkpoint)
+        if has_characters:
+            self.char_to_index = {str(key): int(value) for key, value in checkpoint["char_to_index"].items()}
+            for word in WORDS:
+                missing = set(word).difference(self.char_to_index)
+                if missing:
+                    raise ValueError(f"Checkpoint cannot encode {word!r}: {sorted(missing)}")
+            self.blank_index = int(checkpoint.get("blank_index", 0))
+            indices = list(self.char_to_index.values()) + [self.blank_index]
+            if sorted(indices) != list(range(len(indices))):
+                raise ValueError("Character indices and blank must be distinct and contiguous from zero.")
+            self.model = build_lipnet(checkpoint, num_classes=len(indices), input_channels=1).to(self.device)
+        else:
+            from models.LBY.model import build_lip_reading_classifier
 
-        self.model = LipNet(
-            num_classes=len(self.char_to_index) + 1,
-            input_channels=1,
-        ).to(self.device)
-        self.model.load_state_dict(checkpoint["model_state_dict"])
+            self.label_to_index = {str(key): int(value) for key, value in checkpoint["label_to_index"].items()}
+            if not self.label_to_index or sorted(self.label_to_index.values()) != list(range(len(self.label_to_index))):
+                raise ValueError("Word class indices must be nonempty and contiguous from zero.")
+            self.model = build_lip_reading_classifier(checkpoint, num_classes=len(self.label_to_index)).to(self.device)
+        try:
+            self.model.load_state_dict(checkpoint["model_state_dict"])
+        except RuntimeError as error:
+            raise ValueError(
+                f"{checkpoint_path.name} does not match its recorded "
+                f"architecture {self.architecture!r}: {error}"
+            ) from error
         self.model.eval()
 
     @torch.inference_mode()
     def predict(self, frames: np.ndarray, *, max_frames: int = 90) -> LipPrediction:
-        inputs, lengths = prepare_clip(frames, max_frames=max_frames)
-        log_probs, output_lengths = self.model.ctc_log_probs(
-            inputs.to(self.device),
-            lengths,
-        )
-        scores = score_vocabulary(log_probs, output_lengths, WORDS, self.char_to_index)
+        inputs, lengths = prepare_clip(frames, max_frames=max_frames, prediction_mode=self.prediction_mode)
+        if self.prediction_mode == "ctc":
+            log_probs, output_lengths = self.model.ctc_log_probs(inputs.to(self.device), lengths)
+            scores = score_vocabulary(log_probs, output_lengths, WORDS, self.char_to_index, blank_index=self.blank_index)
+        else:
+            # Match classifier training, which passes padded clips without lengths.
+            probabilities = self.model(inputs.to(self.device)).softmax(dim=-1)[0].cpu()
+            scores = {word: float(probabilities[index]) for word, index in self.label_to_index.items()}
         label = max(scores, key=scores.get)
         return LipPrediction(label=label, confidence=scores[label], scores=scores)
 

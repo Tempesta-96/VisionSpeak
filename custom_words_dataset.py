@@ -131,36 +131,177 @@ def stratified_split(
     return train_df, test_df
 
 
+def available_speakers(dataframe: pd.DataFrame) -> list[str]:
+    """Return the speaker IDs present in the manifest, sorted."""
+    return sorted(dataframe["speaker_id"].astype(str).unique())
+
+
+def choose_holdout_speaker(dataframe: pd.DataFrame) -> str:
+    """Pick a held-out speaker whose class coverage best matches the dataset.
+
+    A speaker missing a word cannot be tested on it, so the most representative
+    speaker is the one that best covers the full label set. Ties break
+    alphabetically to keep the choice deterministic.
+    """
+    labels = set(dataframe["label"].astype(str))
+    scored: list[tuple[float, str]] = []
+    for speaker in available_speakers(dataframe):
+        rows = dataframe[dataframe["speaker_id"].astype(str) == speaker]
+        coverage = len(labels.intersection(set(rows["label"].astype(str)))) / max(len(labels), 1)
+        scored.append((-coverage, speaker))
+    scored.sort()
+    return scored[0][1]
+
+
+def speaker_disjoint_split(
+    dataframe: pd.DataFrame,
+    test_speaker: str | None = None,
+    test_size: float = 0.2,
+    seed: int = 42,
+    return_validation: bool = False,
+):
+    """Hold out one speaker entirely from the training set.
+
+    ``stratified_split`` samples clips at random, so every speaker appears in
+    both train and test and the resulting accuracy measures same-speaker
+    recall. This split instead keeps the held-out speaker's clips only in the
+    test set, which is what makes a score evidence of generalisation.
+
+    Args:
+        dataframe: Manifest rows.
+        test_speaker: Speaker to hold out. Defaults to
+            :func:`choose_holdout_speaker`.
+        test_size: Fraction of the *remaining* speakers set aside as
+            validation, so the test speaker is never used for model selection.
+        seed: Seed for the validation split.
+        return_validation: Return the validation frame as well.
+
+    Returns:
+        ``(train_df, test_df, test_speaker)``, or
+        ``(train_df, validation_df, test_df, test_speaker)`` when
+        ``return_validation`` is set.
+
+    Raises:
+        ValueError: If the requested speaker is absent, or if removing it would
+            leave a class with no training examples.
+    """
+    dataframe = dataframe.reset_index(drop=True)
+    speakers = available_speakers(dataframe)
+    if len(speakers) < 2:
+        raise ValueError(
+            "A speaker-disjoint split needs at least two speakers; "
+            f"the manifest has {len(speakers)}."
+        )
+
+    test_speaker = test_speaker or choose_holdout_speaker(dataframe)
+    if test_speaker not in speakers:
+        raise ValueError(
+            f"Unknown speaker {test_speaker!r}. Available: {speakers}."
+        )
+
+    is_test = dataframe["speaker_id"].astype(str) == test_speaker
+    test_df = dataframe[is_test].reset_index(drop=True)
+    remaining = dataframe[~is_test].reset_index(drop=True)
+    if test_df.empty:
+        raise ValueError(f"Speaker {test_speaker!r} has no clips.")
+
+    # Validation is drawn from the non-held-out speakers, never from the test
+    # speaker, so the test set stays untouched by model selection.
+    train_df, validation_df = stratified_split(remaining, test_size, seed)
+
+    missing = sorted(
+        set(test_df["label"].astype(str)) - set(train_df["label"].astype(str))
+    )
+    if missing:
+        raise ValueError(
+            f"Holding out {test_speaker!r} leaves no training examples for "
+            f"{missing}; these words could never be learned."
+        )
+    if train_df.empty:
+        raise ValueError(f"Holding out {test_speaker!r} leaves no training clips.")
+
+    if not validation_df.empty and not set(validation_df["speaker_id"]).isdisjoint({test_speaker}):
+        raise ValueError("The held-out speaker must not appear in validation.")
+
+    if return_validation:
+        return train_df, validation_df, test_df, test_speaker
+    return train_df, test_df, test_speaker
+
+
+def _make_loader(
+    dataframe: pd.DataFrame,
+    label_to_index: dict[str, int],
+    batch_size: int,
+    num_workers: int,
+    shuffle: bool,
+) -> DataLoader:
+    return DataLoader(
+        CustomWordsDataset(dataframe, label_to_index),
+        batch_size=batch_size,
+        shuffle=shuffle,
+        collate_fn=collate_fn,
+        num_workers=num_workers,
+    )
+
+
 def get_custom_words_dataloaders(
     test_size: float = 0.2,
     seed: int = 42,
     batch_size: int = 16,
     num_workers: int = 0,
     data_dir: str | Path = DEFAULT_DATA_DIR,
-) -> tuple[DataLoader, DataLoader, dict[str, int], dict[int, str]]:
+    speaker_holdout: str | None = None,
+    return_validation: bool = False,
+):
     """Build train/test DataLoaders and return them with the vocab maps.
 
-    Returns ``(train_loader, test_loader, label_to_index, index_to_label)``.
+    Returns ``(train_loader, test_loader, label_to_index, index_to_label)``, or
+    with ``return_validation`` a 5-tuple whose second element is the validation
+    loader; in that case ``test_loader`` moves to third position.
+
+    ``speaker_holdout`` selects the speaker-disjoint protocol: the named
+    speaker's clips appear only in the test loader. This is the honest
+    evaluation; the default per-clip split leaks speakers between train and
+    test and should be treated as an upper bound only.
+
+    With ``speaker_holdout`` set, the validation loader holds out
+    non-test speakers, so selecting a checkpoint on it never touches the
+    held-out speaker. Without it, validation is ``None``: the per-clip split
+    already spends its hold-out on the test set.
     """
     dataframe = load_manifest(data_dir)
     label_to_index, index_to_label = build_label_vocab(dataframe)
+    validation_loader: DataLoader | None = None
 
-    train_df, test_df = stratified_split(dataframe, test_size, seed)
-    train_dataset = CustomWordsDataset(train_df, label_to_index)
-    test_dataset = CustomWordsDataset(test_df, label_to_index)
+    if speaker_holdout is None:
+        train_df, test_df = stratified_split(dataframe, test_size, seed)
+    else:
+        if return_validation:
+            train_df, validation_df, test_df, _ = speaker_disjoint_split(
+                dataframe,
+                test_speaker=speaker_holdout,
+                test_size=test_size,
+                seed=seed,
+                return_validation=True,
+            )
+            validation_loader = _make_loader(
+                validation_df, label_to_index, batch_size, num_workers, shuffle=False
+            )
+        else:
+            train_df, test_df, _ = speaker_disjoint_split(
+                dataframe,
+                test_speaker=speaker_holdout,
+                test_size=test_size,
+                seed=seed,
+            )
 
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        collate_fn=collate_fn,
-        num_workers=num_workers,
+    train_loader = _make_loader(
+        train_df, label_to_index, batch_size, num_workers, shuffle=True
     )
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        collate_fn=collate_fn,
-        num_workers=num_workers,
+    test_loader = _make_loader(
+        test_df, label_to_index, batch_size, num_workers, shuffle=False
     )
+
+    if return_validation:
+        return train_loader, validation_loader, test_loader, label_to_index, index_to_label
     return train_loader, test_loader, label_to_index, index_to_label
