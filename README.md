@@ -15,7 +15,10 @@ hello, hi, yes, no, good, bad, thanks, bye
 2. Load and split those clips with `custom_words_dataset.py`.
 3. Train the isolated-word classifier with `train_custom_words.py`, or use the
    custom CTC experiment in `models/valente/custom_word_training.ipynb`.
-4. Test a trained checkpoint with `webcam_custom_word_detection.ipynb`.
+4. Test a trained checkpoint live with `webcam_custom_word_detection.ipynb`,
+   or offline with `evaluate_custom_words.py` — over recorded clips
+   (`--source npz` / `--source mp4`) or a single raw MP4 recording
+   (`--video path/to/clip.mp4`).
 
 ### Temporal cores: BiGRU and transformer
 

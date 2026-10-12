@@ -14,11 +14,15 @@ Two clip sources:
   gates (minimum frames and fresh-detection rate). Only speakers recorded
   with the updated ``record_custom_word_dataset.ipynb`` have raw videos.
 
+A single raw MP4 file can also be predicted directly with ``--video``,
+bypassing the dataset and manifest entirely.
+
 Examples::
 
     .venv/bin/python evaluate_custom_words.py
     .venv/bin/python evaluate_custom_words.py --speakers speaker_test_samples
     .venv/bin/python evaluate_custom_words.py --source mp4 --speakers speaker_test_samples
+    .venv/bin/python evaluate_custom_words.py --video data/custom_words/raw/speaker_test_samples/hello/clip.mp4
     .venv/bin/python evaluate_custom_words.py --checkpoint checkpoints/valente_custom_words_lipnet_ctc_0.743_acc.pt
     .venv/bin/python evaluate_custom_words.py --output-csv predictions.csv
 """
@@ -127,19 +131,20 @@ def extract_mp4_mouth_frames(
     *,
     min_frames: int,
     min_detection_rate: float,
-) -> tuple[np.ndarray | None, str]:
+) -> tuple[np.ndarray | None, float, str]:
     """Decode one raw video through the live mouth-cropping pipeline.
 
     Mirrors ``inference.lip_worker.capture_clip``: every frame is cropped
     (with box fallback), converted to grayscale, and the clip must pass the
     same quality gates used live. ``clock`` must be shared across every
     video processed by ``cropper`` because MediaPipe requires monotonically
-    increasing timestamps per landmarker instance. Returns ``(frames, "")``
-    on success or ``(None, reason)`` when the clip is unusable.
+    increasing timestamps per landmarker instance. Returns
+    ``(frames, detection_rate, "")`` on success or ``(None, detection_rate,
+    reason)`` when the clip is unusable.
     """
     camera = cv2.VideoCapture(str(video_path))
     if not camera.isOpened():
-        return None, f"could not open video: {video_path}"
+        return None, 0.0, f"could not open video: {video_path}"
 
     frames: list[np.ndarray] = []
     fresh_detections = 0
@@ -164,8 +169,8 @@ def extract_mp4_mouth_frames(
         min_detection_rate=min_detection_rate,
     )
     if retry_message:
-        return None, retry_message
-    return np.stack(frames).astype(np.uint8, copy=False), ""
+        return None, detection_rate, retry_message
+    return np.stack(frames).astype(np.uint8, copy=False), detection_rate, ""
 
 
 def predict_mp4_result(
@@ -208,7 +213,7 @@ def predict_mp4_result(
         )
 
     cropper.reset_tracking()
-    frames, message = extract_mp4_mouth_frames(
+    frames, _detection_rate, message = extract_mp4_mouth_frames(
         video_path,
         cropper,
         clock,
@@ -389,12 +394,62 @@ def write_results_csv(
             )
 
 
+def run_single_video(
+    video_path: Path,
+    *,
+    checkpoint: Path,
+    device: str,
+    max_frames: int,
+    min_frames: int,
+    min_detection_rate: float,
+) -> int:
+    """Predict the word in one raw MP4 file through the live pipeline."""
+    if not video_path.is_file():
+        print(f"Video file not found: {video_path}", file=sys.stderr)
+        return 1
+
+    print(f"Video: {video_path}")
+    try:
+        predictor = LipPredictor(checkpoint, device)
+        with MouthCropper() as cropper:
+            # One clock for the whole run, exactly like the live webcam
+            # session: the shared landmarker needs ever-increasing timestamps.
+            clock = TimestampClock()
+            frames, detection_rate, message = extract_mp4_mouth_frames(
+                video_path,
+                cropper,
+                clock,
+                min_frames=min_frames,
+                min_detection_rate=min_detection_rate,
+            )
+    except Exception as error:
+        print(f"Could not process {video_path}: {error}", file=sys.stderr)
+        return 1
+
+    print(
+        f"Checkpoint: {checkpoint.name} "
+        f"(mode: {predictor.prediction_mode}, core: {predictor.architecture}) "
+        f"| Device: {predictor.device}"
+    )
+    if frames is None:
+        print(f"Rejected: {message}", file=sys.stderr)
+        return 1
+
+    prediction = predictor.predict(frames, max_frames=max_frames)
+    print(f"Mouth frames: {len(frames)} | fresh-detection rate: {detection_rate:.0%}")
+    print(f"Prediction: {prediction.label.upper()} ({prediction.confidence:.1%})")
+    print("Word scores:")
+    for word, score in sorted(prediction.scores.items(), key=lambda item: -item[1]):
+        print(f"  {word:>8}: {score:.1%}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI parser."""
     parser = argparse.ArgumentParser(
         description=(
-            "Evaluate the deployed valente CTC lip reader on the recorded "
-            "custom-word dataset without a webcam."
+            "Evaluate the deployed lip reader on the recorded custom-word "
+            "dataset without a webcam, or predict a single raw MP4 file."
         )
     )
     parser.add_argument(
@@ -424,6 +479,16 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Comma-separated speaker ids to evaluate (default: all). "
             "Example: --speakers speaker_007,speaker_test_samples"
+        ),
+    )
+    parser.add_argument(
+        "--video",
+        type=Path,
+        default=None,
+        help=(
+            "Predict the word in a single raw MP4 file (e.g. a recording "
+            "from record_custom_word_dataset.ipynb) instead of evaluating "
+            "the dataset."
         ),
     )
     parser.add_argument(
@@ -473,6 +538,33 @@ def main(argv: list[str] | None = None) -> int:
     if not checkpoint.is_file():
         print(f"Lip checkpoint not found: {checkpoint}", file=sys.stderr)
         return 1
+
+    if args.video:
+        dataset_only = [
+            flag
+            for flag, given in (
+                ("--source", args.source != "npz"),
+                ("--speakers", args.speakers is not None),
+                ("--data-dir", args.data_dir != DEFAULT_DATA_DIR),
+                ("--output-csv", args.output_csv is not None),
+            )
+            if given
+        ]
+        if dataset_only:
+            print(
+                f"--video cannot be combined with {' '.join(dataset_only)}; "
+                "single-video mode predicts one file directly.",
+                file=sys.stderr,
+            )
+            return 1
+        return run_single_video(
+            Path(args.video).expanduser(),
+            checkpoint=checkpoint,
+            device=args.device,
+            max_frames=args.max_frames,
+            min_frames=args.min_frames,
+            min_detection_rate=args.min_detection_rate,
+        )
 
     try:
         manifest = load_manifest_frame(data_dir)

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import csv
+import io
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import cv2
 import numpy as np
@@ -17,14 +20,32 @@ from inference.lip_worker import FRAME_HEIGHT, FRAME_WIDTH, TimestampClock, WORD
 class FakePredictor:
     """Stand-in for LipPredictor that records the frames it receives."""
 
-    def __init__(self, label: str = "hello", confidence: float = 0.75) -> None:
+    def __init__(
+        self,
+        checkpoint=None,
+        device_name: str = "auto",
+        *,
+        label: str = "hello",
+        confidence: float = 0.75,
+    ) -> None:
         self.label = label
         self.confidence = confidence
         self.received: list[np.ndarray] = []
+        remainder = (1.0 - confidence) / max(len(WORDS) - 1, 1)
+        self.scores = {
+            word: confidence if word == label else remainder for word in WORDS
+        }
+        self.prediction_mode = "ctc"
+        self.architecture = "bigru"
+        self.device = "cpu"
 
     def predict(self, frames, *, max_frames: int = 90):
         self.received.append(np.asarray(frames))
-        return SimpleNamespace(label=self.label, confidence=self.confidence)
+        return SimpleNamespace(
+            label=self.label,
+            confidence=self.confidence,
+            scores=dict(self.scores),
+        )
 
 
 class FakeCropper:
@@ -34,6 +55,12 @@ class FakeCropper:
         self.fresh = fresh
         self.calls = 0
         self.resets = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        return None
 
     def reset_tracking(self) -> None:
         self.resets += 1
@@ -213,7 +240,7 @@ class Mp4SourceTests(unittest.TestCase):
             cropper = RecordingCropper()
             clock = TimestampClock()  # One clock for the whole run, like the live session.
             for video in (first_video, second_video):
-                frames, message = ec.extract_mp4_mouth_frames(
+                frames, _detection_rate, message = ec.extract_mp4_mouth_frames(
                     video, cropper, clock, min_frames=5, min_detection_rate=0.5
                 )
                 self.assertIsNotNone(frames)
@@ -342,6 +369,75 @@ class CsvOutputTests(unittest.TestCase):
         self.assertEqual(rows[0]["source"], "mp4")
         self.assertEqual(rows[1]["status"], "rejected")
         self.assertEqual(rows[1]["note"], "too short")
+
+
+class SingleVideoTests(unittest.TestCase):
+    """CLI-level tests for the --video single-file prediction mode."""
+
+    def _write_video(self, directory: Path, frame_count: int = 20) -> Path:
+        video_path = directory / "clip.mp4"
+        video_path.parent.mkdir(parents=True, exist_ok=True)
+        writer = cv2.VideoWriter(
+            str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), 30.0, (64, 48)
+        )
+        self.assertTrue(writer.isOpened())
+        for _ in range(frame_count):
+            writer.write(np.full((48, 64, 3), 100, dtype=np.uint8))
+        writer.release()
+        return video_path
+
+    def _run_main(self, argv: list[str]) -> tuple[int, str, str]:
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with (
+            patch.object(ec, "LipPredictor", FakePredictor),
+            patch.object(ec, "MouthCropper", FakeCropper),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            exit_code = ec.main(argv)
+        return exit_code, stdout.getvalue(), stderr.getvalue()
+
+    def test_video_mode_prints_prediction_and_scores(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            video_path = self._write_video(Path(tmp))
+            exit_code, stdout, stderr = self._run_main(
+                ["--video", str(video_path), "--min-frames", "5"]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Prediction: HELLO", stdout)
+        self.assertIn("Word scores:", stdout)
+        self.assertIn("hello:", stdout)
+        self.assertIn("Mouth frames: 20", stdout)
+        self.assertIn("fresh-detection rate: 100%", stdout)
+        self.assertIn("mode: ctc", stdout)
+
+    def test_video_mode_rejects_clips_failing_the_quality_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            video_path = self._write_video(Path(tmp), frame_count=20)
+            exit_code, stdout, stderr = self._run_main(
+                ["--video", str(video_path), "--min-frames", "100"]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Rejected:", stderr)
+        self.assertIn("at least 100", stderr)
+
+    def test_video_mode_reports_missing_file(self) -> None:
+        exit_code, stdout, stderr = self._run_main(
+            ["--video", "/nonexistent/clip.mp4"]
+        )
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Video file not found", stderr)
+
+    def test_video_mode_rejects_dataset_only_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            video_path = self._write_video(Path(tmp))
+            exit_code, stdout, stderr = self._run_main(
+                ["--video", str(video_path), "--speakers", "spk_a"]
+            )
+        self.assertEqual(exit_code, 1)
+        self.assertIn("cannot be combined with --speakers", stderr)
 
 
 class MainTests(unittest.TestCase):
