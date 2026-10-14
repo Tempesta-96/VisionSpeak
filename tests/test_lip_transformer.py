@@ -381,6 +381,64 @@ class CheckpointCompatibilityTests(unittest.TestCase):
             build_lip_reading_classifier("nope", num_classes=10)
 
 
+class HeadActivationTests(unittest.TestCase):
+    """The head's non-linearity must not be able to kill the network.
+
+    A ReLU whose input goes negative receives exactly zero gradient, so a head
+    that goes fully negative can never recover — and because backprop through it
+    is zero, the GRU and the CNN frontend freeze with it. That is what happened
+    to every Word + BiGRU run: the head returned a constant equal to its bias, so
+    every clip was labelled with whichever class had the largest bias.
+    """
+
+    def test_gelu_head_still_receives_gradient_when_every_unit_is_negative(self) -> None:
+        model = LipReadingClassifier(num_classes=8, head_activation="gelu")
+        activation = model.classifier[1]
+        self.assertIsInstance(activation, nn.GELU)
+
+        inputs = torch.full((1, 16), -1.5, requires_grad=True)
+        activation(inputs).sum().backward()
+        self.assertGreater(
+            float(inputs.grad.abs().sum()),
+            0.0,
+            "a fully negative pre-activation must still pass gradient back",
+        )
+
+    def test_relu_head_is_the_case_that_cannot_recover(self) -> None:
+        """Documents the failure the option exists to avoid, so the fix stays justified."""
+        activation = nn.ReLU()
+        inputs = torch.full((1, 16), -1.5, requires_grad=True)
+        activation(inputs).sum().backward()
+        self.assertEqual(float(inputs.grad.abs().sum()), 0.0)
+
+    def test_legacy_settings_rebuild_with_relu(self) -> None:
+        """Checkpoints predating the option must behave exactly as they were trained."""
+        model = build_lip_reading_classifier({"architecture": "bigru"}, num_classes=8)
+        self.assertIsInstance(model.classifier[1], nn.ReLU)
+        self.assertEqual(model.head_activation, "relu")
+
+    def test_recorded_gelu_setting_is_honoured(self) -> None:
+        model = build_lip_reading_classifier(
+            {"architecture": "bigru", "head_activation": "gelu"}, num_classes=8
+        )
+        self.assertIsInstance(model.classifier[1], nn.GELU)
+
+    def test_unknown_head_activation_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "head_activation must be one of"):
+            LipReadingClassifier(num_classes=8, head_activation="tanh")
+
+    def test_the_option_adds_no_parameters_so_checkpoints_stay_loadable(self) -> None:
+        relu = LipReadingClassifier(num_classes=8, head_activation="relu")
+        gelu = LipReadingClassifier(num_classes=8, head_activation="gelu")
+        self.assertEqual(list(relu.state_dict()), list(gelu.state_dict()))
+        gelu.load_state_dict(relu.state_dict())  # strict load must not care
+
+    def test_the_trainer_records_gelu(self) -> None:
+        """New runs must not inherit the legacy default by accident."""
+        source = (PROJECT_ROOT / "models" / "LBY" / "train_custom_words.py").read_text()
+        self.assertIn('"head_activation": "gelu"', source)
+
+
 class TransformerConfigurationTests(unittest.TestCase):
     @staticmethod
     def _parameter_count(module: nn.Module) -> int:

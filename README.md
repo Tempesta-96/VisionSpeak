@@ -52,6 +52,15 @@ unchanged. A checkpoint records its own settings, and
 `inference/lip_worker.py` rebuilds whatever architecture the file declares — you
 do not tell the inference path which one it is loading.
 
+The word classifier's head also records a `head_activation`. New runs use
+`"gelu"`; a checkpoint that does not record the key rebuilds with the historical
+ReLU, so older files keep predicting exactly what they used to. The distinction
+matters: a ReLU whose input goes fully negative receives zero gradient and can
+never recover, and because backprop through it is zero the GRU and the CNN
+freeze with it. That is how the Word + BiGRU runs collapsed — every clip was
+labelled with whichever class had the largest output bias. GELU has a non-zero
+gradient for negative inputs, so that failure cannot be permanent.
+
 ```bash
 # Run as a module from the repository root: the script imports the repository's
 # top-level modules, so `python models/LBY/train_custom_words.py` fails.

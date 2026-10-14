@@ -14,7 +14,7 @@
 #   EPOCHS_WORD=2 EPOCHS_CTC=2 scripts/retrain_lip_models.sh   # smoke test
 #
 # Overridable environment:
-#   EPOCHS_WORD (80)   EPOCHS_CTC (200)   BATCH_WORD (32)   BATCH_CTC (16)
+#   EPOCHS_WORD (50)   EPOCHS_CTC (50)   BATCH_WORD (32)   BATCH_CTC (16)
 #   TEST_SPEAKER (speaker_test_samples)   DEVICE (auto)     TAG (run label)
 #
 set -uo pipefail

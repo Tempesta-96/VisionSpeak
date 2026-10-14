@@ -152,6 +152,11 @@ def main() -> None:
         "transformer_layers": args.layers,
         "transformer_heads": args.heads,
         "transformer_feedforward": args.feedforward,
+        # GELU, not the historical ReLU: a ReLU head that goes fully negative
+        # gets zero gradient and can never recover, which is exactly how the
+        # BiGRU runs collapsed to one predicted word. Recorded here so the
+        # checkpoint rebuilds with the same non-linearity it trained with.
+        "head_activation": "gelu",
     }
 
     print(f"Device: {device}")
