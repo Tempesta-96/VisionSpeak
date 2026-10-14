@@ -83,6 +83,17 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Use the original MultiStepLR schedule instead of the transformer-friendly cosine one.",
     )
+    parser.add_argument(
+        "--all-training-data",
+        action="store_true",
+        help=(
+            "Train on every clip from the non-test speakers and keep the final "
+            "epoch, instead of carving a validation split out of them. The test "
+            "speaker is not evaluated until training ends, so nothing selects on "
+            "it. Requires --speaker-holdout to name that test speaker. There is "
+            "no early stopping or best-epoch selection in this mode."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -103,6 +114,11 @@ def main() -> None:
 
     validation_loader = None
     if holdout is None:
+        if args.all_training_data:
+            raise SystemExit(
+                "--all-training-data needs --speaker-holdout SPEAKER to name the "
+                "test speaker kept out of training."
+            )
         train_loader, test_loader, label_to_index, index_to_label = (
             get_custom_words_dataloaders(
                 test_size=0.2,
@@ -124,6 +140,7 @@ def main() -> None:
             batch_size=args.batch_size,
             speaker_holdout=holdout,
             return_validation=True,
+            carve_validation=not args.all_training_data,
         )
     num_classes = len(label_to_index)
 
@@ -135,6 +152,11 @@ def main() -> None:
         "transformer_layers": args.layers,
         "transformer_heads": args.heads,
         "transformer_feedforward": args.feedforward,
+        # GELU, not the historical ReLU: a ReLU head that goes fully negative
+        # gets zero gradient and can never recover, which is exactly how the
+        # BiGRU runs collapsed to one predicted word. Recorded here so the
+        # checkpoint rebuilds with the same non-linearity it trained with.
+        "head_activation": "gelu",
     }
 
     print(f"Device: {device}")
@@ -152,7 +174,13 @@ def main() -> None:
         )
     else:
         print(f"Split: speaker-disjoint, holding out {holdout!r} entirely.")
-        if validation_loader is not None:
+        if args.all_training_data:
+            print(
+                "Mode: ALL training data. Every non-test clip trains; no "
+                "validation split, no best-epoch selection. The final epoch is "
+                "the deliverable and the test speaker is scored once, at the end."
+            )
+        elif validation_loader is not None:
             print(
                 f"Validation samples: {len(validation_loader.dataset)} "
                 "(non-test speakers; used for checkpoint selection)"
@@ -177,10 +205,18 @@ def main() -> None:
     args.checkpoint.parent.mkdir(parents=True, exist_ok=True)
     # Select the checkpoint on validation when a speaker-disjoint validation
     # split exists, so the held-out test speaker never influences model choice.
-    # Without one, fall back to test accuracy and say so.
-    selection_loader = validation_loader if validation_loader is not None else test_loader
-    selection_name = "valid" if validation_loader is not None else "test"
-    best_accuracy = 0.0
+    # Without one, fall back to test accuracy and say so. In all-training-data
+    # mode there is nothing to select on: the final epoch is saved as-is and
+    # the test speaker stays unread until training is over.
+    all_training_data = args.all_training_data
+    if all_training_data:
+        selection_loader = None
+        selection_name = "none"
+        best_accuracy = float("nan")
+    else:
+        selection_loader = validation_loader if validation_loader is not None else test_loader
+        selection_name = "valid" if validation_loader is not None else "test"
+        best_accuracy = 0.0
 
     def run_epoch(loader, training):
         model.train(training)
@@ -201,13 +237,24 @@ def main() -> None:
 
     for epoch in range(1, args.epochs + 1):
         train_loss, train_acc = run_epoch(train_loader, training=True)
-        selection_loss, selection_acc = run_epoch(selection_loader, training=False)
         scheduler.step()
+        if all_training_data:
+            # flush: under a pipe (tee, CI) stdout is block buffered, so without
+            # this an 80-epoch run looks stalled for ten minutes at a time.
+            print(
+                f"Epoch {epoch:2d}/{args.epochs} | "
+                f"train_loss {train_loss:.4f} train_acc {train_acc:.4f} | "
+                f"lr {optimizer.param_groups[0]['lr']:.1e}",
+                flush=True,
+            )
+            continue
+        selection_loss, selection_acc = run_epoch(selection_loader, training=False)
         print(
             f"Epoch {epoch:2d}/{args.epochs} | "
             f"train_loss {train_loss:.4f} train_acc {train_acc:.4f} | "
             f"{selection_name}_loss {selection_loss:.4f} {selection_name}_acc {selection_acc:.4f} | "
-            f"lr {optimizer.param_groups[0]['lr']:.1e}"
+            f"lr {optimizer.param_groups[0]['lr']:.1e}",
+            flush=True,
         )
         if selection_acc > best_accuracy:
             best_accuracy = selection_acc
@@ -223,7 +270,26 @@ def main() -> None:
                 args.checkpoint,
             )
 
-    print(f"Best {selection_name} accuracy: {best_accuracy:.4f}")
+    if all_training_data:
+        torch.save(
+            {
+                "epoch": args.epochs,
+                "model_state_dict": model.state_dict(),
+                "label_to_index": label_to_index,
+                "selection_accuracy": None,
+                "selection_split": "final-epoch-no-validation",
+                "trained_on": "all non-test-speaker clips",
+                "test_speaker": holdout,
+                **settings,
+            },
+            args.checkpoint,
+        )
+        print(
+            f"Saved final-epoch checkpoint (epoch {args.epochs}, "
+            f"{len(train_loader.dataset)} training clips) to {args.checkpoint}"
+        )
+    else:
+        print(f"Best {selection_name} accuracy: {best_accuracy:.4f}")
 
     # ---- Final evaluation: per-word accuracy + confusion matrix ----
     checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
@@ -266,6 +332,13 @@ def main() -> None:
             "\nNote: this split is per-clip random, so every speaker appears in "
             "both train and test. Treat the accuracy as a same-speaker upper bound. "
             "Re-run with --speaker-holdout for a generalisation number."
+        )
+    elif all_training_data:
+        print(
+            f"\nAll-training-data result: trained on every clip from the other four "
+            f"speakers ({len(train_loader.dataset)} clips) for a fixed {args.epochs} "
+            f"epochs, and scored once on {holdout!r} ({len(test_loader.dataset)} clips) "
+            "afterwards. No checkpoint selection used this speaker."
         )
     else:
         print(

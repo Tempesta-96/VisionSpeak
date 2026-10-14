@@ -23,6 +23,12 @@ from models.transformer_encoder import TemporalTransformerEncoder, masked_mean_p
 
 Architecture = Literal["bigru", "transformer"]
 
+#: Selectable non-linearity between the head's two linear layers. Neither
+#: option has parameters, so a checkpoint is agnostic to which one built it —
+#: only the recorded setting decides how it is rebuilt. See the class docstring
+#: for why ``"relu"`` remains the default but is not what new runs should use.
+HEAD_ACTIVATIONS: dict[str, type[nn.Module]] = {"relu": nn.ReLU, "gelu": nn.GELU}
+
 
 class AttentionPooling(nn.Module):
     """Reduce ``[batch, time, dim]`` to ``[batch, dim]`` with learned attention.
@@ -74,12 +80,28 @@ class LipReadingClassifier(nn.Module):
         pooling: Sequence reduction on the transformer path. ``"attention"``
             uses :class:`AttentionPooling`; ``"mean"`` uses masked mean
             pooling.
+        head_activation: ``"gelu"`` or ``"relu"``, the non-linearity between the
+            head's two linear layers.
 
     Note:
         For the default 50x100 input, the spatial output is 96 x 3 x 6, so the
         first linear layer sees ``feature_dim = 96 * 3 * 6``. Unlike
         ``models.valente.model.LipNet`` this frontend is not lazy, so the input
         geometry is fixed at construction time.
+
+    Note:
+        ``head_activation`` defaults to ``"relu"`` only so that the word
+        checkpoints trained before this option existed rebuild exactly as they
+        were trained. Prefer ``"gelu"`` for new runs, and note that
+        ``models/LBY/train_custom_words.py`` records it as ``"gelu"``.
+
+        The default is not a recommendation. A ReLU whose input goes negative
+        receives exactly zero gradient, so once the BiGRU path drove all 256
+        head units negative the layer could never recover — and because
+        backprop through it was zero, the GRU and the 3D-CNN froze with it. The
+        head then returned a constant (its bias), and every clip was labelled
+        with whichever class had the largest bias. GELU has a non-zero gradient
+        for negative inputs, so that failure cannot be permanent.
     """
 
     def __init__(
@@ -93,6 +115,7 @@ class LipReadingClassifier(nn.Module):
         transformer_heads: int = 4,
         transformer_feedforward: int = 512,
         transformer_max_tokens: int = 96,
+        head_activation: str = "relu",
     ) -> None:
         super().__init__()
         if architecture not in ("bigru", "transformer"):
@@ -101,10 +124,16 @@ class LipReadingClassifier(nn.Module):
             )
         if pooling not in ("attention", "mean"):
             raise ValueError(f"pooling must be 'attention' or 'mean', got {pooling!r}.")
+        if head_activation not in HEAD_ACTIVATIONS:
+            raise ValueError(
+                f"head_activation must be one of {sorted(HEAD_ACTIVATIONS)}, "
+                f"got {head_activation!r}."
+            )
 
         self.architecture = architecture
         self.pooling = pooling
         self.gru_hidden = gru_hidden
+        self.head_activation = head_activation
 
         self.conv1 = nn.Sequential(
             nn.Conv3d(1, 32, kernel_size=(3, 5, 5), stride=(1, 2, 2), padding=(1, 2, 2)),
@@ -154,7 +183,7 @@ class LipReadingClassifier(nn.Module):
 
         self.classifier = nn.Sequential(
             nn.Linear(head_input, 256),
-            nn.ReLU(inplace=True),
+            HEAD_ACTIVATIONS[head_activation](),
             nn.Dropout(dropout),
             nn.Linear(256, num_classes),
         )
@@ -203,7 +232,10 @@ def build_lip_reading_classifier(settings: dict, num_classes: int) -> LipReading
     """Construct a classifier from checkpoint settings.
 
     Checkpoints written before the transformer experiment carry no
-    ``architecture`` key and therefore load as ``"bigru"``.
+    ``architecture`` key and therefore load as ``"bigru"``. Likewise, checkpoints
+    written before the head non-linearity became selectable carry no
+    ``head_activation`` key and rebuild with the ReLU they were trained with, so
+    their predictions are unchanged.
     """
     if not isinstance(settings, dict):
         raise TypeError("settings must be a mapping of checkpoint values.")
@@ -216,6 +248,7 @@ def build_lip_reading_classifier(settings: dict, num_classes: int) -> LipReading
         "transformer_heads",
         "transformer_feedforward",
         "transformer_max_tokens",
+        "head_activation",
     }
     options = {key: settings[key] for key in known if key in settings}
     return LipReadingClassifier(

@@ -182,5 +182,72 @@ class SplitValidationTests(unittest.TestCase):
         )
 
 
+class CarveValidationTests(unittest.TestCase):
+    """``carve_validation=False`` spends every non-test clip on training.
+
+    The point of the mode is that nothing is held back for model selection, so
+    the held-out speaker stays unread until the run is over. These tests pin the
+    two properties that makes true: training gets strictly more clips, and the
+    test speaker is still absent from it.
+    """
+
+    def test_no_validation_frame_is_carved_out(self) -> None:
+        manifest = synthetic_manifest()
+        train_df, validation_df, test_df, chosen = speaker_disjoint_split(
+            manifest,
+            test_speaker="s1",
+            return_validation=True,
+            carve_validation=False,
+        )
+        self.assertEqual(chosen, "s1")
+        self.assertTrue(validation_df.empty)
+        # Everything that is not the test speaker trains: no clip is dropped.
+        self.assertEqual(len(train_df) + len(test_df), len(manifest))
+        self.assertTrue(set(train_df["speaker_id"]).isdisjoint(set(test_df["speaker_id"])))
+
+    def test_all_training_data_keeps_more_clips_than_the_carved_split(self) -> None:
+        manifest = synthetic_manifest()
+        carved, _validation, _test, _ = speaker_disjoint_split(
+            manifest, test_speaker="s1", return_validation=True
+        )
+        everything, _empty, _test2, _ = speaker_disjoint_split(
+            manifest,
+            test_speaker="s1",
+            return_validation=True,
+            carve_validation=False,
+        )
+        self.assertGreater(len(everything), len(carved))
+
+    def test_dataloaders_return_no_validation_loader(self) -> None:
+        train_loader, validation_loader, test_loader, label_to_index, _ = (
+            get_custom_words_dataloaders(
+                batch_size=4,
+                speaker_holdout="TestID",
+                return_validation=True,
+                carve_validation=False,
+            )
+        )
+        self.assertIsNone(validation_loader)
+        self.assertEqual(len(train_loader.dataset) + len(test_loader.dataset), 800)
+        self.assertEqual(
+            set(test_loader.dataset.dataframe["speaker_id"]), {"TestID"}
+        )
+        self.assertNotIn(
+            "TestID", set(train_loader.dataset.dataframe["speaker_id"])
+        )
+        self.assertEqual(set(label_to_index), set(WORDS))
+
+    def test_carve_validation_without_a_holdout_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "requires a speaker_holdout"):
+            get_custom_words_dataloaders(batch_size=4, carve_validation=False)
+
+    def test_default_still_carves_validation(self) -> None:
+        """The default must not change: existing callers rely on the 4-tuple."""
+        _train, _validation, _test, _ = speaker_disjoint_split(
+            synthetic_manifest(), test_speaker="s1", return_validation=True
+        )
+        self.assertFalse(_validation.empty)
+
+
 if __name__ == "__main__":
     unittest.main()
