@@ -159,6 +159,7 @@ def speaker_disjoint_split(
     test_size: float = 0.2,
     seed: int = 42,
     return_validation: bool = False,
+    carve_validation: bool = True,
 ):
     """Hold out one speaker entirely from the training set.
 
@@ -175,6 +176,10 @@ def speaker_disjoint_split(
             validation, so the test speaker is never used for model selection.
         seed: Seed for the validation split.
         return_validation: Return the validation frame as well.
+        carve_validation: When ``False``, no validation frame is carved out and
+            every non-test-speaker clip goes to training. Use this for a
+            fixed-budget run whose deliverable is the final epoch; the returned
+            validation frame is then empty. ``test_size`` is ignored.
 
     Returns:
         ``(train_df, test_df, test_speaker)``, or
@@ -206,8 +211,13 @@ def speaker_disjoint_split(
         raise ValueError(f"Speaker {test_speaker!r} has no clips.")
 
     # Validation is drawn from the non-held-out speakers, never from the test
-    # speaker, so the test set stays untouched by model selection.
-    train_df, validation_df = stratified_split(remaining, test_size, seed)
+    # speaker, so the test set stays untouched by model selection. With
+    # carve_validation=False every remaining clip trains and validation is empty.
+    if carve_validation:
+        train_df, validation_df = stratified_split(remaining, test_size, seed)
+    else:
+        train_df = remaining
+        validation_df = remaining.iloc[0:0]
 
     missing = sorted(
         set(test_df["label"].astype(str)) - set(train_df["label"].astype(str))
@@ -252,6 +262,7 @@ def get_custom_words_dataloaders(
     data_dir: str | Path = DEFAULT_DATA_DIR,
     speaker_holdout: str | None = None,
     return_validation: bool = False,
+    carve_validation: bool = True,
 ):
     """Build train/test DataLoaders and return them with the vocab maps.
 
@@ -268,12 +279,19 @@ def get_custom_words_dataloaders(
     non-test speakers, so selecting a checkpoint on it never touches the
     held-out speaker. Without it, validation is ``None``: the per-clip split
     already spends its hold-out on the test set.
+
+    ``carve_validation=False`` (requires ``speaker_holdout``) trains on every
+    non-test-speaker clip and returns a ``None`` validation loader, so the
+    caller must supply its own stopping rule; see
+    ``models/LBY/train_custom_words.py --all-training-data``.
     """
     dataframe = load_manifest(data_dir)
     label_to_index, index_to_label = build_label_vocab(dataframe)
     validation_loader: DataLoader | None = None
 
     if speaker_holdout is None:
+        if not carve_validation:
+            raise ValueError("carve_validation=False requires a speaker_holdout.")
         train_df, test_df = stratified_split(dataframe, test_size, seed)
     else:
         if return_validation:
@@ -283,16 +301,19 @@ def get_custom_words_dataloaders(
                 test_size=test_size,
                 seed=seed,
                 return_validation=True,
+                carve_validation=carve_validation,
             )
-            validation_loader = _make_loader(
-                validation_df, label_to_index, batch_size, num_workers, shuffle=False
-            )
+            if not validation_df.empty:
+                validation_loader = _make_loader(
+                    validation_df, label_to_index, batch_size, num_workers, shuffle=False
+                )
         else:
             train_df, test_df, _ = speaker_disjoint_split(
                 dataframe,
                 test_speaker=speaker_holdout,
                 test_size=test_size,
                 seed=seed,
+                carve_validation=carve_validation,
             )
 
     train_loader = _make_loader(

@@ -13,12 +13,28 @@ hello, hi, yes, no, good, bad, thanks, bye
 
 1. Record mouth-only training clips with `record_custom_word_dataset.ipynb`.
 2. Load and split those clips with `custom_words_dataset.py`.
-3. Train the isolated-word classifier with `train_custom_words.py`, or use the
-   custom CTC experiment in `models/valente/custom_word_training.ipynb`.
+3. Train the isolated-word classifier with
+   `python -m models.LBY.train_custom_words` (`--architecture transformer` or
+   `--architecture bigru`), with the notebook version in
+   `models/LBY/lip_transformer_training.ipynb` — which gives every run its own
+   `checkpoints/lip_transformer/<run_name>/` directory so runs can be compared —
+   or with the custom CTC experiment in `models/valente/custom_word_training.ipynb`,
+   whose `ARCHITECTURE` setting selects the same two cores for the CTC model.
 4. Test a trained checkpoint live with `webcam_custom_word_detection.ipynb`,
    or offline with `evaluate_custom_words.py` — over recorded clips
    (`--source npz` / `--source mp4`) or a single raw MP4 recording
    (`--video path/to/clip.mp4`).
+5. Compare two checkpoints head to head on the raw MP4 clips with
+   `compare_lip_models.py`, which mouth-crops every video once through the live
+   pipeline and scores both models on the identical frames:
+
+   ```bash
+   .venv/bin/python compare_lip_models.py
+   ```
+
+   It writes accuracy, a 95% Wilson interval, per-word accuracy, confusion
+   matrices (text, JSON and PNG heatmaps) and an exact McNemar test of the two
+   models to `reports/lip_comparison/`.
 
 ### Temporal cores: BiGRU and transformer
 
@@ -37,11 +53,29 @@ unchanged. A checkpoint records its own settings, and
 do not tell the inference path which one it is loading.
 
 ```bash
-# Transformer CTC experiment (default), then serve it through the webcam CLI
-.venv/bin/python train_custom_words.py --architecture transformer
+# Run as a module from the repository root: the script imports the repository's
+# top-level modules, so `python models/LBY/train_custom_words.py` fails.
+# Transformer word-classifier experiment (the default core), served afterwards
+# through the webcam CLI:
+.venv/bin/python -m models.LBY.train_custom_words \
+    --architecture transformer \
+    --speaker-holdout speaker_test_samples \
+    --epochs 100 \
+    --checkpoint checkpoints/lip_transformer/transformer-attention-holdout-speaker_test_samples/best.pt
+
 .venv/bin/python main.py --mode lip \
-    --lip-checkpoint checkpoints/custom_words.pt
+    --lip-checkpoint checkpoints/lip_transformer/transformer-attention-holdout-speaker_test_samples/best.pt
+
+# The BiGRU core, same protocol, its own checkpoint directory:
+.venv/bin/python -m models.LBY.train_custom_words \
+    --architecture bigru \
+    --speaker-holdout speaker_test_samples \
+    --epochs 100 \
+    --checkpoint checkpoints/lip_bigru/bigru-holdout-speaker_test_samples/best.pt
 ```
+
+Always pass `--checkpoint`: without it the script writes to
+`checkpoints/custom_words.pt` and overwrites that legacy checkpoint.
 
 The transformer path strides time by 2 in the *first* convolutional block only.
 That bound is not arbitrary: CTC requires `input_length >= 2 * target_length + 1`,
@@ -58,46 +92,65 @@ that means something:
 
 ```bash
 # Hold out one speaker entirely; auto-picks the most representative speaker
-.venv/bin/python train_custom_words.py --architecture transformer --speaker-holdout
+.venv/bin/python -m models.LBY.train_custom_words --architecture transformer --speaker-holdout
 
-# Or name the speaker
-.venv/bin/python train_custom_words.py --architecture bigru --speaker-holdout TestID
+# Or name the speaker (this is the speaker whose raw MP4s are the video test set)
+.venv/bin/python -m models.LBY.train_custom_words --architecture bigru \
+    --speaker-holdout speaker_test_samples \
+    --checkpoint checkpoints/lip_bigru/bigru-holdout-speaker_test_samples/best.pt
 ```
+
+The `--legacy-milestones` flag restores the original `MultiStepLR([40, 60])`
+schedule instead of the transformer-friendly cosine one; use it to reproduce the
+older BiGRU runs. Omitting `--speaker-holdout` altogether gives the per-clip
+random split, whose accuracy is a same-speaker upper bound only.
 
 With `--speaker-holdout`, validation is drawn from the non-test speakers and the
 checkpoint is selected on it, so the held-out speaker never influences model
 choice.
 
-### Measured: the split matters more than the architecture
+### Spending every clip on training
 
-Both cores, ~14 epochs on this CPU, holding out one speaker (384 train / 160
-test clips, 8 classes, so chance is 12.5%):
+`--all-training-data` (available on both trainers) drops that validation
+carve-out: all 640 clips from the non-test speakers train and the final epoch is
+the deliverable. The test speaker is not read until training ends, so nothing
+selects on it — but there is also no early stopping, so the epoch count is a
+commitment rather than a ceiling. Reach for it when you want the model to see
+every available clip and can accept that trade:
 
-| Core | Training accuracy | Test accuracy |
-| --- | --- | --- |
-| transformer | 0.15 → **0.27** | **0.26 peak**, ~0.13 typical |
-| bigru (cosine schedule) | 0.13, flat | 0.13, flat |
-| bigru (original MultiStepLR) | 0.13, flat | 0.13, flat |
+```bash
+# Word classifier: 640 training clips, scored once on the held-out speaker
+.venv/bin/python -m models.LBY.train_custom_words \
+    --architecture transformer --pooling attention \
+    --all-training-data --speaker-holdout speaker_test_samples \
+    --epochs 100 --checkpoint checkpoints/retrain/word_transformer_attention.pt
 
-Read this carefully, because it is the most useful result on this branch and it
-is *not* "the transformer wins":
+# CTC model: same protocol, through the command-line trainer
+.venv/bin/python -m models.valente.train_custom_words \
+    --architecture bigru \
+    --all-training-data --speaker-holdout speaker_test_samples \
+    --epochs 100 --checkpoint checkpoints/retrain/ctc_bigru.pt
+```
 
-- Under speaker-disjoint evaluation **both models are weak**. The task barely
-  generalises across signers with only 4 speakers, and one held-out speaker is a
-  small, noisy test set.
-- The BiGRU never escaped predicting a single class: it sat at exactly 0.125,
-  the majority-class rate, under both learning-rate schedules. It did not overfit
-  the training speakers either (training accuracy stayed at 0.13), so this is an
-  optimisation problem for this configuration rather than proof that recurrence
-  cannot represent the task.
-- The transformer did start fitting the training speakers (0.27) and briefly
-  cleared chance on the unseen speaker before its validation loss rose. That is
-  overfitting, not generalisation.
+`models/valente/train_custom_words.py` is the command-line counterpart of
+`models/valente/custom_word_training.ipynb`. The notebook is fine for
+exploration, but it splits clips at random — every speaker lands in train *and*
+test — and then selects its checkpoint on that same set. The script uses the
+speaker-disjoint protocol instead, and reports two test numbers that are not
+interchangeable:
 
-The honest conclusion: architecture is not this project's bottleneck. With 640
-clips from 4 speakers, more capacity does not buy cross-signer accuracy. More
-speakers — and real video rather than still images and three-second clips — are
-what will move these numbers.
+- **greedy** — CTC greedy decode counted correct only on an exact string match,
+  so a near-miss like `helo` scores zero.
+- **scored** — `inference.lip_worker.score_vocabulary`, the deployed path that
+  ranks the eight known words by CTC sequence likelihood. This is the number to
+  quote next to `compare_lip_models.py` and the webcam tools.
+
+Both families retrain end to end with `scripts/retrain_lip_models.sh`, and
+`scripts/evaluate_retrained.sh` then scores every checkpoint — the retrained
+four plus the older ones, for reference — on the held-out speaker's clips
+through the deployed inference path.
+
+## Live Web Cam Testing
 
 For a single webcam interface that can switch between custom lip reading and
 YOLO gesture recognition, use `combinedVisionSpeak.ipynb`. Its OpenCV window
