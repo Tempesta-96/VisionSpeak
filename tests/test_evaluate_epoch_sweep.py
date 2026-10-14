@@ -49,12 +49,17 @@ def synthetic_summaries(epochs, architectures):
     for epoch_index, epoch in enumerate(epochs):
         for column_index, (key, _) in enumerate(architectures):
             correct = 10 * (epoch_index + 1) + column_index
+            per_word = correct // len(sweep.WORDS)
+            confusion = [[0] * len(sweep.WORDS) for _ in sweep.WORDS]
+            for position in range(len(sweep.WORDS)):
+                confusion[position][position] = per_word
             summaries[(epoch, key)] = {
                 "accuracy": correct / 160,
                 "correct": correct,
                 "predicted": 160,
                 "accuracy_ci95": [0.1, 0.3],
                 "status_counts": {"predicted": 160},
+                "confusion_matrix": confusion,
             }
     return summaries
 
@@ -139,6 +144,137 @@ class ValidateGridTests(unittest.TestCase):
             warnings = sweep.validate_grid(grid, (50,), ONE_ARCHITECTURE)
         self.assertEqual(len(warnings), 1)
         self.assertIn("does not record test_speaker", warnings[0])
+
+
+class ClipDirectoryTests(unittest.TestCase):
+    """``rows_from_clip_directory`` is how a folder of recordings is evaluated."""
+
+    @staticmethod
+    def make_tree(root: Path, layout: dict[str, list[str]]) -> None:
+        for word, names in layout.items():
+            folder = root / word
+            folder.mkdir(parents=True, exist_ok=True)
+            for name in names:
+                (folder / name).write_bytes(b"")
+
+    def test_scans_words_into_manifest_shaped_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "speaker_008"
+            self.make_tree(root, {"yes": ["speaker_008_yes_r02_aaaa.mp4"], "no": ["speaker_008_no_r01_bbbb.mp4"]})
+            rows = sweep.rows_from_clip_directory(root)
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(sorted(rows["label"]), ["no", "yes"])
+        # The file stem is the sample_id the manifest would carry, which is what
+        # lets an earlier run's cropped frames be reused from the cache.
+        self.assertIn("speaker_008_yes_r02_aaaa", set(rows["sample_id"]))
+        # The folder name is the speaker id when none is supplied.
+        self.assertEqual(set(rows["speaker_id"]), {"speaker_008"})
+        self.assertEqual(
+            rows.loc[rows["label"] == "yes", "repetition"].item(), 2
+        )
+        for path in rows["raw_video_path"]:
+            self.assertTrue(Path(path).is_absolute())
+
+    def test_speaker_id_can_be_overridden(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "some-folder"
+            self.make_tree(root, {"hi": ["x_r01_y.mp4"]})
+            rows = sweep.rows_from_clip_directory(root, speaker_id="speaker_009")
+        self.assertEqual(set(rows["speaker_id"]), {"speaker_009"})
+
+    def test_missing_directory_is_reported(self) -> None:
+        with self.assertRaises(sweep.SweepError) as caught:
+            sweep.rows_from_clip_directory(Path(tempfile.gettempdir()) / "definitely-not-here")
+        self.assertIn("Clips directory not found", str(caught.exception))
+
+    def test_directory_without_clips_is_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "yes").mkdir()
+            with self.assertRaises(sweep.SweepError) as caught:
+                sweep.rows_from_clip_directory(root)
+        self.assertIn("No .mp4 files found", str(caught.exception))
+
+    def test_a_folder_that_is_not_a_word_is_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.make_tree(root, {"yes": ["a_r01_b.mp4"], "banana": ["c_r01_d.mp4"]})
+            with self.assertRaises(sweep.SweepError) as caught:
+                sweep.rows_from_clip_directory(root)
+        self.assertIn("banana", str(caught.exception))
+
+
+class CheckpointSetTests(unittest.TestCase):
+    """One directory per architecture, resolved to ``<arch>_ep<N>.pt``."""
+
+    def test_resolves_every_cell_from_one_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            for key, _ in TWO_ARCHITECTURES:
+                for epoch in (50, 100):
+                    write_checkpoint(directory, f"{key}_ep{epoch}.pt", epoch=epoch)
+            grid = sweep.build_grid_from_sets(
+                {key: directory for key, _ in TWO_ARCHITECTURES}, (50, 100), TWO_ARCHITECTURES
+            )
+        self.assertEqual(len(grid), 2)
+        self.assertEqual([len(row) for row in grid], [2, 2])
+        self.assertEqual(grid[0][0].tag, "ctc_bigru_ep50")
+        self.assertEqual(grid[1][1].tag, "word_transformer_attention_ep100")
+
+    def test_each_architecture_may_point_somewhere_else(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            first, second = Path(temporary) / "a", Path(temporary) / "b"
+            write_checkpoint(first, "ctc_bigru_ep50.pt")
+            write_checkpoint(second, "word_transformer_attention_ep50.pt")
+            grid = sweep.build_grid_from_sets(
+                {"ctc_bigru": first, "word_transformer_attention": second}, (50,), TWO_ARCHITECTURES
+            )
+        self.assertEqual(grid[0][0].path.parent.name, "a")
+        self.assertEqual(grid[0][1].path.parent.name, "b")
+
+    def test_a_missing_cell_names_the_gap(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            write_checkpoint(directory, "ctc_bigru_ep50.pt")
+            with self.assertRaises(sweep.SweepError) as caught:
+                sweep.build_grid_from_sets(
+                    {key: directory for key, _ in TWO_ARCHITECTURES}, (50,), TWO_ARCHITECTURES
+                )
+        message = str(caught.exception)
+        self.assertIn("Word + Transformer @ 50 epochs", message)
+        self.assertIn("retrain_lip_models.sh", message)
+
+    def test_an_unknown_architecture_key_is_rejected(self) -> None:
+        with self.assertRaises(sweep.SweepError) as caught:
+            sweep.build_grid_from_sets({"not_a_real_arch": Path("checkpoints/retrain")}, (50,))
+        self.assertIn("Unknown architecture key", str(caught.exception))
+
+
+class ConfusionGridTests(unittest.TestCase):
+    def test_one_panel_per_checkpoint_titled_with_its_score(self) -> None:
+        summaries = synthetic_summaries((50, 100), TWO_ARCHITECTURES)
+        figure = sweep.render_confusion_grid(summaries, (50, 100), TWO_ARCHITECTURES)
+        try:
+            self.assertEqual(len(figure.axes), 4)  # 2 epochs x 2 architectures
+            titles = [axis.get_title() for axis in figure.axes]
+        finally:
+            import matplotlib.pyplot as plt
+
+            plt.close(figure)
+        self.assertIn("CTC + BiGRU @ 50", titles[0])
+        self.assertIn("6.25%", titles[0])
+        self.assertIn("Word + Transformer @ 100", titles[-1])
+
+    def test_the_full_grid_has_twelve_panels(self) -> None:
+        summaries = synthetic_summaries(sweep.EPOCH_BUDGETS, sweep.ARCHITECTURES)
+        figure = sweep.render_confusion_grid(summaries)
+        try:
+            self.assertEqual(len(figure.axes), 12)
+        finally:
+            import matplotlib.pyplot as plt
+
+            plt.close(figure)
 
 
 class RenderingTests(unittest.TestCase):

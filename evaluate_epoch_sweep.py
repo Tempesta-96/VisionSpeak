@@ -51,19 +51,23 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 import argparse
 import csv
+import re
 import sys
 from pathlib import Path
 
 import pandas as pd
+import numpy as np
 import torch
 
 from compare_lip_models import (
     DEFAULT_CACHE_DIR,
     PROJECT_ROOT,
+    WORDS,
     ModelSpec,
     extract_frames,
     model_summary,
     predict_frames,
+    render_confusion,
     resolve,
 )
 from custom_words_dataset import load_manifest
@@ -132,6 +136,115 @@ def build_grid(
             "  EPOCHS_WORD=<n> EPOCHS_CTC=<n> TAG=ep<n> scripts/retrain_lip_models.sh"
         )
     return grid
+
+
+def build_grid_from_sets(
+    checkpoint_sets: "dict[str, Path | str]",
+    epochs: tuple[int, ...] = EPOCH_BUDGETS,
+    architectures: tuple[tuple[str, str], ...] = ARCHITECTURES,
+) -> list[list[ModelSpec]]:
+    """Expand one checkpoint directory per architecture into the full grid.
+
+    ``checkpoint_sets`` maps each architecture key to the directory holding its
+    ``<arch>_ep<epoch>.pt`` files, so a run recorded into its own directory can
+    be swept by pointing all four entries at it.
+
+    Raises:
+        SweepError: If an architecture is missing from the mapping, or any cell's
+            file does not exist, naming every gap.
+    """
+    unknown = [key for key in checkpoint_sets if key not in dict(architectures)]
+    if unknown:
+        known = ", ".join(key for key, _ in architectures)
+        raise SweepError(
+            f"Unknown architecture key(s) {sorted(unknown)}; expected one of: {known}."
+        )
+
+    grid: list[list[ModelSpec]] = []
+    missing: list[str] = []
+
+    for epoch in epochs:
+        row: list[ModelSpec] = []
+        for key, label in architectures:
+            if key not in checkpoint_sets:
+                missing.append(f"  {label}: no checkpoint directory configured")
+                row.append(ModelSpec(tag=f"{key}_ep{epoch}", path=Path(), note=label))
+                continue
+            directory = resolve(Path(checkpoint_sets[key]))
+            path = directory / CHECKPOINT_TEMPLATE.format(arch=key, epoch=epoch)
+            if not path.is_file():
+                missing.append(f"  {label} @ {epoch} epochs  ->  {path}")
+            row.append(ModelSpec(tag=f"{key}_ep{epoch}", path=path, note=f"{label}, {epoch} epochs"))
+        grid.append(row)
+
+    if missing:
+        raise SweepError(
+            "Missing checkpoint(s) for the requested grid:\n"
+            + "\n".join(missing)
+            + "\n\nProduce them with, for example:\n"
+            "  EPOCHS_WORD=<n> EPOCHS_CTC=<n> TAG=ep<n> scripts/retrain_lip_models.sh"
+        )
+    return grid
+
+
+def rows_from_clip_directory(
+    root: Path | str,
+    *,
+    speaker_id: str | None = None,
+) -> pd.DataFrame:
+    """Build manifest-shaped rows by scanning ``root/<word>/*.mp4``.
+
+    This is how a folder of recordings is evaluated without going through the
+    manifest: the immediate subdirectories are the word labels, and each ``.mp4``
+    under one of them is a clip of that word.
+
+    ``sample_id`` is the file stem, which is exactly what the manifest records,
+    so frames cropped by an earlier run are reused from the cache rather than
+    re-decoded. ``raw_video_path`` is absolute, which makes the ``data_dir`` a
+    caller passes to :func:`run_sweep` inert for these rows.
+
+    Raises:
+        SweepError: If ``root`` is not a directory, holds no ``.mp4`` files, or
+            has a word folder outside the eight known words.
+    """
+    root = Path(root)
+    if not root.is_dir():
+        raise SweepError(f"Clips directory not found: {root}")
+
+    speaker = speaker_id or root.name
+    unknown = sorted(
+        entry.name for entry in root.iterdir() if entry.is_dir() and entry.name not in WORDS
+    )
+    if unknown:
+        raise SweepError(
+            f"{root} has folder(s) {unknown} that are not among the known words "
+            f"{list(WORDS)}; each subdirectory must be named after the word it holds."
+        )
+
+    records: list[dict] = []
+    for word in WORDS:
+        word_dir = root / word
+        if not word_dir.is_dir():
+            continue
+        for video in sorted(word_dir.glob("*.mp4")):
+            match = re.search(r"_r(\d+)_", video.stem)
+            records.append(
+                {
+                    "sample_id": video.stem,
+                    "speaker_id": speaker,
+                    "label": word,
+                    "repetition": int(match.group(1)) if match else len(records) + 1,
+                    "relative_path": str(video.relative_to(root)),
+                    "raw_video_path": str(video.resolve()),
+                }
+            )
+
+    if not records:
+        raise SweepError(
+            f"No .mp4 files found under {root}. Expected subdirectories named after "
+            f"the words, for example {root / 'yes' / 'clip.mp4'}."
+        )
+    return pd.DataFrame.from_records(records)
 
 
 def validate_grid(
@@ -288,6 +401,109 @@ def write_artifacts(
     return markdown_path, csv_path, per_clip_path
 
 
+def run_sweep(
+    grid: list[list[ModelSpec]],
+    rows: pd.DataFrame,
+    epochs: tuple[int, ...] = EPOCH_BUDGETS,
+    architectures: tuple[tuple[str, str], ...] = ARCHITECTURES,
+    *,
+    data_dir: Path,
+    cache_dir: Path,
+    device: str = "auto",
+    max_frames: int = DEFAULT_MAX_FRAMES,
+    min_frames: int = DEFAULT_MIN_FRAMES,
+    min_detection_rate: float = DEFAULT_MIN_DETECTION_RATE,
+    refresh_frames: bool = False,
+    progress=None,
+) -> tuple[dict[tuple[int, str], dict], list[dict]]:
+    """Crop every clip once, then score every checkpoint over those frames.
+
+    Returns ``(summaries, per_clip)`` where ``summaries`` is keyed by
+    ``(epoch, architecture_key)`` and ``per_clip`` holds one dict per
+    model/clip pair. ``progress`` is an optional ``callable(str)`` invoked once
+    per checkpoint, so the CLI can print and a notebook can display.
+    """
+    emit = progress or (lambda _message: None)
+
+    frames_by_id = extract_frames(
+        rows,
+        data_dir=data_dir,
+        cache_dir=cache_dir,
+        max_frames=max_frames,
+        min_frames=min_frames,
+        min_detection_rate=min_detection_rate,
+        refresh=refresh_frames,
+    )
+
+    summaries: dict[tuple[int, str], dict] = {}
+    per_clip: list[dict] = []
+    for row_index, row_specs in enumerate(grid):
+        epoch = epochs[row_index]
+        for column_index, spec in enumerate(row_specs):
+            key, label = architectures[column_index]
+            results, metadata = predict_frames(
+                spec, rows, frames_by_id, device=device, max_frames=max_frames
+            )
+            summary = model_summary(results)
+            summaries[(epoch, key)] = summary
+            per_clip.extend(
+                {
+                    "architecture": label,
+                    "epoch": epoch,
+                    "sample_id": result.sample_id,
+                    "label": result.label,
+                    "predicted": result.predicted,
+                    "confidence": f"{result.confidence:.6f}",
+                    "correct": result.correct,
+                    "status": result.status,
+                }
+                for result in results
+            )
+            emit(
+                f"  [{row_index + 1}/{len(grid)}] {label:<18} @ {epoch:>3} epochs  "
+                f"{format_percent(summary['accuracy']):>7}  "
+                f"({summary['correct']}/{summary['predicted']}, {metadata['device']})"
+            )
+    return summaries, per_clip
+
+
+def render_confusion_grid(
+    summaries: dict[tuple[int, str], dict],
+    epochs: tuple[int, ...] = EPOCH_BUDGETS,
+    architectures: tuple[tuple[str, str], ...] = ARCHITECTURES,
+    *,
+    figure_size: tuple[float, float] | None = None,
+):
+    """Draw one confusion-matrix panel per checkpoint in a rows-by-columns grid.
+
+    The layout mirrors the accuracy table: epochs down the rows, architectures
+    across the columns, so a panel sits directly under the cell it explains.
+    Each panel is normalised by truth, with raw counts annotated by
+    :func:`compare_lip_models.render_confusion`.
+    """
+    import matplotlib.pyplot as plt
+
+    columns = len(architectures)
+    rows_count = len(epochs)
+    if figure_size is None:
+        figure_size = (3.9 * columns, 3.6 * rows_count)
+
+    figure, axes = plt.subplots(
+        rows_count, columns, figsize=figure_size, squeeze=False, constrained_layout=True
+    )
+    for row_index, epoch in enumerate(epochs):
+        for column_index, (key, label) in enumerate(architectures):
+            summary = summaries[(epoch, key)]
+            matrix = np.asarray(summary["confusion_matrix"])
+            render_confusion(
+                axes[row_index][column_index],
+                matrix,
+                f"{label} @ {epoch}\n{format_percent(summary['accuracy'])} "
+                f"({summary['correct']}/{summary['predicted']})",
+            )
+    return figure
+
+
 def parse_epochs(raw: str) -> tuple[int, ...]:
     """Parse a comma-separated epoch list into a non-empty tuple of ints."""
     epochs = tuple(int(part) for part in raw.replace(" ", "").split(",") if part)
@@ -357,46 +573,20 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Clips: {len(rows)} raw MP4 files for {', '.join(speakers)}")
     print(f"Grid:  {len(args.epochs)} epoch budgets x {len(ARCHITECTURES)} architectures "
           f"= {len(args.epochs) * len(ARCHITECTURES)} checkpoints")
-    frames_by_id = extract_frames(
+    summaries, per_clip = run_sweep(
+        grid,
         rows,
+        args.epochs,
+        ARCHITECTURES,
         data_dir=data_dir,
         cache_dir=cache_dir,
+        device=args.device,
         max_frames=args.max_frames,
         min_frames=args.min_frames,
         min_detection_rate=args.min_detection_rate,
-        refresh=args.refresh_frames,
+        refresh_frames=args.refresh_frames,
+        progress=print,
     )
-
-    summaries: dict[tuple[int, str], dict] = {}
-    per_clip: list[dict] = []
-    for row_index, row_specs in enumerate(grid):
-        epoch = args.epochs[row_index]
-        for column_index, spec in enumerate(row_specs):
-            key, label = ARCHITECTURES[column_index]
-            results, metadata = predict_frames(
-                spec, rows, frames_by_id, device=args.device, max_frames=args.max_frames
-            )
-            summary = model_summary(results)
-            summaries[(epoch, key)] = summary
-            per_clip.extend(
-                {
-                    "architecture": label,
-                    "epoch": epoch,
-                    "sample_id": result.sample_id,
-                    "label": result.label,
-                    "predicted": result.predicted,
-                    "confidence": f"{result.confidence:.6f}",
-                    "correct": result.correct,
-                    "status": result.status,
-                }
-                for result in results
-            )
-            print(
-                f"  [{row_index + 1}/{len(grid)}] {label:<18} @ {epoch:>3} epochs  "
-                f"{format_percent(summary['accuracy']):>7}  "
-                f"({summary['correct']}/{summary['predicted']}, {metadata['device']})",
-                flush=True,
-            )
 
     accuracy_grid = render_grid(
         lambda epoch, key: format_percent(summaries[(epoch, key)]["accuracy"]), args.epochs
