@@ -184,7 +184,7 @@ room.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `EPOCHS_WORD` / `EPOCHS_CTC` | 50 / 50 | Training epochs for each family |
-| `TEST_SPEAKER` | `speaker_test_samples` | Speaker held out as test data |
+| `TEST_SPEAKER` | `speaker_test_samples1` | Speaker held out as test data |
 | `TAG` | *(empty)* | Suffix appended to every checkpoint and log name |
 | `OUT` | `checkpoints/retrain` | Directory the checkpoints are written to |
 | `LOGS` | `reports/retrain` | Directory the per-run logs are written to |
@@ -209,9 +209,9 @@ with epoch budgets down the rows and architectures across the columns:
 ```text
 epoch  CTC + BiGRU  CTC + Transformer  Word + BiGRU  Word + Transformer
 -----  -----------  -----------------  ------------  ------------------
-50          16.25%             23.75%        12.50%              40.62%
-100         31.87%             24.38%        12.50%              35.00%
-200         49.38%             40.62%        12.50%              49.38%
+50          23.75%             25.00%        41.25%              73.75%
+100         40.62%             25.00%        35.62%              76.88%
+200         69.38%             45.62%        53.12%              78.75%
 ```
 
 By default it scores the 160 raw MP4 recordings, mouth-cropping each one **once**
@@ -244,7 +244,7 @@ a number:
 
 ### Testing against a different speaker
 
-`speaker_test_samples` is the current test set, but it is a parameter rather
+`speaker_test_samples1` is the current test set, but it is a parameter rather
 than a constant in both scripts, so a future recording session can become the
 held-out set without changing any code.
 
@@ -255,7 +255,7 @@ which writes the MP4s under `data/custom_words/raw/<speaker_id>/` and the
 matching manifest rows.
 
 Then hold that speaker out of training, keeping their checkpoints in their own
-directory so the `speaker_test_samples` ones survive:
+directory so the `speaker_test_samples1` ones survive:
 
 ```bash
 # Train with speaker_008 held out at each budget.
@@ -284,7 +284,7 @@ and `raw_video_path` columns.
 Two things to expect. A speaker with no raw MP4s cannot be swept: `--speakers`
 finds no clips and the run stops with `no raw MP4 clips for speaker(s) …`
 rather than reporting an empty table. And evaluating the existing
-`speaker_test_samples` checkpoints against a different speaker is refused by the
+`speaker_test_samples1` checkpoints against a different speaker is refused by the
 guard above, because that speaker is inside their training set — such a score is
 a same-speaker number, not a held-out one. `--allow-speaker-mismatch` overrides
 that refusal when you knowingly want it.
