@@ -1,0 +1,24 @@
+image,expected,predicted,confidence,result
+apple8_png.rf.2223ad974dc1c409f6869766a3bb56cd.jpg,apple,no detection,0.0000,WRONG
+can6_png.rf.a9c927fbaeddf114b68a0e840c6f37d9.jpg,can,can,0.8913,RIGHT
+get10_JPG.rf.9df5ec57a256245e5f89a121ecef58e8.jpg,get,get,0.5931,RIGHT
+get3_png.rf.eacbff80b76b970238d077e1cc42c938.jpg,get,get,0.3926,RIGHT
+good10_JPG.rf.01be30acd25b1a5650436eef4c97da1a.jpg,good,good,0.6590,RIGHT
+good8_JPG.rf.6d67a1a51c932ffa55c15a364335b075.jpg,good,good,0.9341,RIGHT
+have9_JPG.rf.177da98655a744ec285ea9a6c6eeab62.jpg,have,have,0.9720,RIGHT
+help1_png.rf.a51f9b875888c7c1465cd12927dc9cde.jpg,help,help,0.3572,RIGHT
+like11_JPG.rf.86c10f8d9dc5c3ad815c0ef3302b785c.jpg,like,like,0.9824,RIGHT
+like13_JPG.rf.e86cd2f88f876706a444ab16893b019e.jpg,like,I,0.5224,WRONG
+like9_JPG.rf.1e6c0b77c947173e75e9d454adcd3819.jpg,like,like,0.9096,RIGHT
+love10_JPG.rf.0038bdf657f62c1d0190688b14c0bae2.jpg,love,love,0.9825,RIGHT
+No1_png.rf.0f33b5bb6cc862274b2318b605836f05.jpg,no,no,0.9849,RIGHT
+sorry6_png.rf.49234bb6c0168c362988b03e62294935.jpg,sorry,no detection,0.0000,WRONG
+ty14_JPG.rf.d0a9e602c843bdc24a8a9df73fc0f37e.jpg,thank-you,thank-you,0.9604,RIGHT
+ty6_png.rf.b2042e03670f2aa6157328e10285c88d.jpg,thank-you,thank-you,0.8285,RIGHT
+ty8_JPG.rf.37e6adc037c0fe87cf373adbe0dd42ee.jpg,thank-you,thank-you,0.9447,RIGHT
+want11_JPG.rf.eb59287ab7e38dfc87a80f0ddbd81028.jpg,want,want,0.8845,RIGHT
+want4_png.rf.75188446e00095cba174d5f9e2621227.jpg,want,want,0.8955,RIGHT
+yes9_png.rf.b8259693e4da0f48d7cddd836869b547.jpg,yes,yes,0.9612,RIGHT
+you7_png.rf.69e9dfddce122b16892cd6c458d056cf.jpg,you,yes,0.9270,WRONG
+your12_JPG.rf.807e1581fd20e154dc654daa19fe0be8.jpg,your,your,0.7659,RIGHT
+your4_png.rf.f38ddc58a8f50fc3a5d8ac05d1e781ad.jpg,your,your,0.9160,RIGHT
