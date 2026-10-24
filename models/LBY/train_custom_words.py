@@ -26,7 +26,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 
-from prepare_custom_word_dataset import (
+from data.prepare_custom_word_dataset import (
     available_speakers,
     choose_holdout_speaker,
     get_custom_words_dataloaders,

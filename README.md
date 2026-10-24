@@ -11,8 +11,8 @@ The active lip-reading experiments recognise these eight isolated words:
 hello, hi, yes, no, good, bad, thanks, bye
 ```
 
-1. Record mouth-only training clips with `record_custom_word_dataset.ipynb`.
-2. Load and split those clips with `prepare_custom_word_dataset.py`.
+1. Record mouth-only training clips with `data/record_custom_word_dataset.ipynb`.
+2. Load and split those clips with `data/prepare_custom_word_dataset.py`.
 3. Train the isolated-word classifier with
    `python -m models.LBY.train_custom_words` (`--architecture transformer` or
    `--architecture bigru`), with the notebook version in
@@ -96,7 +96,7 @@ manifest, so changing the stride fails the tests rather than silently breaking
 the loss.
 
 A note on reading the accuracy numbers: the default split in
-`prepare_custom_word_dataset.stratified_split` is per-clip random, so **all four
+`data.prepare_custom_word_dataset.stratified_split` is per-clip random, so **all four
 speakers appear in both train and test**. Use `--speaker-holdout` for a number
 that means something:
 
@@ -252,7 +252,7 @@ held-out set without changing any code.
 
 The sweep always scores **raw MP4 recordings** — it decodes each video through
 the live mouth-cropping pipeline. So the only thing a new test speaker needs is
-their recordings on disk: record them with `record_custom_word_dataset.ipynb`,
+their recordings on disk: record them with `data/record_custom_word_dataset.ipynb`,
 which writes the MP4s under `data/custom_words/raw/<speaker_id>/` and the
 matching manifest rows.
 
@@ -384,7 +384,7 @@ worth fixing before the result is trusted:
    the equivalent per-clip split put all four speakers in train *and* test, and
    a speaker-disjoint re-evaluation dropped the score to roughly chance. The
    `transformer/lip-reading` branch has `speaker_disjoint_split()` in
-   `prepare_custom_word_dataset.py`; the same protocol should be applied here by
+   `data/prepare_custom_word_dataset.py`; the same protocol should be applied here by
    splitting on signer before any accuracy figure is quoted.
 2. **Synthetic windows.** Windows are built from still images, so they carry
    jitter and scale drift rather than a real signing trajectory. A model can

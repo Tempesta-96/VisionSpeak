@@ -2,7 +2,7 @@
 
 Loads ``data/custom_words/manifest.csv`` and lazily reads per-clip grayscale
 mouth frames from the ``.npz`` archives produced by
-``record_custom_word_dataset.ipynb``.
+``data/record_custom_word_dataset.ipynb``.
 
 Each clip stores ``frames`` as ``(T, 50, 100)`` uint8. Samples are returned as
 ``(T, 1, 50, 100)`` float32 in ``[0, 1]`` to match a LipNet-style 3D-CNN input,
@@ -19,7 +19,7 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-DEFAULT_DATA_DIR = Path("data/custom_words")
+DEFAULT_DATA_DIR = Path(__file__).resolve().parent / "custom_words"
 
 
 def load_manifest(data_dir: str | Path = DEFAULT_DATA_DIR) -> pd.DataFrame:
@@ -29,7 +29,7 @@ def load_manifest(data_dir: str | Path = DEFAULT_DATA_DIR) -> pd.DataFrame:
     if not manifest_path.is_file():
         raise FileNotFoundError(
             f"Custom-words manifest not found: {manifest_path}. "
-            "Run record_custom_word_dataset.ipynb first."
+            "Run data/record_custom_word_dataset.ipynb first."
         )
 
     dataframe = pd.read_csv(

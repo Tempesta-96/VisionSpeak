@@ -12,7 +12,7 @@ Two clip sources:
 * ``mp4`` — full-face raw videos decoded and re-cropped frame-by-frame
   through the live ``MouthCropper`` pipeline, including the live quality
   gates (minimum frames and fresh-detection rate). Only speakers recorded
-  with the updated ``record_custom_word_dataset.ipynb`` have raw videos.
+  with the updated ``data/record_custom_word_dataset.ipynb`` have raw videos.
 
 A single raw MP4 file can also be predicted directly with ``--video``,
 bypassing the dataset and manifest entirely.
@@ -44,7 +44,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from prepare_custom_word_dataset import load_manifest as load_manifest_frame
+from data.prepare_custom_word_dataset import load_manifest as load_manifest_frame
 from inference.lip_worker import (
     LipPredictor,
     TimestampClock,
@@ -490,7 +490,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Predict the word in a single raw MP4 file (e.g. a recording "
-            "from record_custom_word_dataset.ipynb) instead of evaluating "
+            "from data/record_custom_word_dataset.ipynb) instead of evaluating "
             "the dataset."
         ),
     )

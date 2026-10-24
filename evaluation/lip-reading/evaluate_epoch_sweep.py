@@ -75,7 +75,7 @@ from .compare_lip_models import (
     render_confusion,
     resolve,
 )
-from prepare_custom_word_dataset import load_manifest
+from data.prepare_custom_word_dataset import load_manifest
 
 #: ``(key, display label)`` in the column order the table is printed in.
 ARCHITECTURES: tuple[tuple[str, str], ...] = (

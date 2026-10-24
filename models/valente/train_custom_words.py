@@ -46,7 +46,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 
-from prepare_custom_word_dataset import (
+from data.prepare_custom_word_dataset import (
     available_speakers,
     choose_holdout_speaker,
     load_manifest,
