@@ -21,16 +21,16 @@ hello, hi, yes, no, good, bad, thanks, bye
    or with the archived custom CTC experiment in
    `archive/kaggle_lip_reading/models/valente/custom_word_training.ipynb`,
    whose `ARCHITECTURE` setting selects the same two cores for the CTC model.
-4. Test a trained checkpoint live with `webcam_custom_word_detection.ipynb`,
-   or offline with `evaluate_custom_words.py` — over recorded clips
+4. Test a trained checkpoint live with `evaluation/lip-reading/webcam_lip_model_comparison.ipynb`,
+   or offline with `evaluation/lip-reading/evaluate_custom_words.py` — over recorded clips
    (`--source npz` / `--source mp4`) or a single raw MP4 recording
    (`--video path/to/clip.mp4`).
 5. Compare two checkpoints head to head on the raw MP4 clips with
-   `compare_lip_models.py`, which mouth-crops every video once through the live
+   `evaluation/lip-reading/compare_lip_models.py`, which mouth-crops every video once through the live
    pipeline and scores both models on the identical frames:
 
    ```bash
-   .venv/bin/python compare_lip_models.py
+   .venv/bin/python evaluation/lip-reading/compare_lip_models.py
    ```
 
    It writes accuracy, a 95% Wilson interval, per-word accuracy, confusion
@@ -154,7 +154,7 @@ interchangeable:
   so a near-miss like `helo` scores zero.
 - **scored** — `inference.lip_worker.score_vocabulary`, the deployed path that
   ranks the eight known words by CTC sequence likelihood. This is the number to
-  quote next to `compare_lip_models.py` and the webcam tools.
+  quote next to `evaluation/lip-reading/compare_lip_models.py` and the webcam tools.
 
 ### Batch training all four cores
 
@@ -179,7 +179,7 @@ EPOCHS_WORD=200 EPOCHS_CTC=200 TAG=ep200 scripts/retrain_lip_models.sh
 ```
 
 `TAG` must be `ep<N>` matching the epoch count: that is the filename convention
-`models/LBY/evaluate_epoch_sweep.py` looks for. The three runs are independent, so they can
+`evaluation/lip-reading/evaluate_epoch_sweep.py` looks for. The three runs are independent, so they can
 be issued back to back, or concurrently in separate terminals if the GPU has
 room.
 
@@ -200,12 +200,12 @@ scores the same checkpoints one at a time through the deployed inference path.
 
 ### Sweeping epoch budgets
 
-`models/LBY/evaluate_epoch_sweep.py` scores the whole architecture × epoch grid on the
+`evaluation/lip-reading/evaluate_epoch_sweep.py` scores the whole architecture × epoch grid on the
 held-out speaker's clips and prints it as a 3×4 table of overall test accuracy,
 with epoch budgets down the rows and architectures across the columns:
 
 ```bash
-.venv/bin/python -m models.LBY.evaluate_epoch_sweep
+.venv/bin/python evaluation/lip-reading/evaluate_epoch_sweep.py
 ```
 
 ```text
@@ -270,7 +270,7 @@ for budget in 50 100 200; do
 done
 
 # Score those checkpoints on that speaker's recordings.
-.venv/bin/python -m models.LBY.evaluate_epoch_sweep \
+.venv/bin/python evaluation/lip-reading/evaluate_epoch_sweep.py \
     --speakers speaker_008 \
     --checkpoint-dir checkpoints/retrain_speaker_008 \
     --output-dir reports/retrain_speaker_008 \

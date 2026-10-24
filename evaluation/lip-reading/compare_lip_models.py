@@ -18,27 +18,32 @@ taken from its directory name via the manifest.
 
 Examples::
 
-    .venv/bin/python compare_lip_models.py
-    .venv/bin/python compare_lip_models.py --speakers speaker_test_samples
-    .venv/bin/python compare_lip_models.py --refresh-frames --limit 20
+    .venv/bin/python evaluation/lip-reading/compare_lip_models.py
+    .venv/bin/python evaluation/lip-reading/compare_lip_models.py --speakers speaker_test_samples
+    .venv/bin/python evaluation/lip-reading/compare_lip_models.py --refresh-frames --limit 20
 """
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if __package__ in (None, ""):
+    sys.path.insert(0, str(PROJECT_ROOT))
+    __package__ = "evaluation.lip-reading"
 
 # Keep matplotlib's cache inside the project (its default path is read-only here)
 # and call this before matplotlib is imported anywhere.
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
-os.environ.setdefault("MPLCONFIGDIR", str(Path(__file__).resolve().parent / ".cache" / "matplotlib"))
+os.environ.setdefault("MPLCONFIGDIR", str(PROJECT_ROOT / ".cache" / "matplotlib"))
 
 import argparse
 import json
 import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import sys
 import time
 
 import matplotlib
@@ -50,7 +55,7 @@ import pandas as pd
 import torch
 
 from prepare_custom_word_dataset import load_manifest
-from evaluate_custom_words import (
+from .evaluate_custom_words import (
     ClipResult,
     build_confusion_matrix,
     extract_mp4_mouth_frames,
@@ -60,7 +65,6 @@ from evaluate_custom_words import (
 from inference.lip_worker import LipPredictor, TimestampClock
 from processing.mouth_cropper import MouthCropper
 
-PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_DATA_DIR = Path("data/custom_words")
 DEFAULT_CTC_CHECKPOINT = Path("checkpoints/valente_custom_words_lipnet_ctc_0.852_acc.pt")
 DEFAULT_TRANSFORMER_CHECKPOINT = Path(

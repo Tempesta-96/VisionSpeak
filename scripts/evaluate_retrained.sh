@@ -50,7 +50,7 @@ for entry in "${CANDIDATES[@]}"; do
   fi
 
   echo "############ $tag ############"
-  if "$PY" evaluate_custom_words.py \
+  if "$PY" evaluation/lip-reading/evaluate_custom_words.py \
       --source npz \
       --speakers "$SPEAKER" \
       --checkpoint "$checkpoint" \

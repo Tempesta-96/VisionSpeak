@@ -37,4 +37,4 @@ python -m archive.kaggle_lip_reading.models.valente.train
 
 This code is archived rather than maintained. New lip-reading work should use
 `record_custom_word_dataset.ipynb`, `prepare_custom_word_dataset.py`,
-`train_custom_words.py`, and `webcam_custom_word_detection.ipynb`.
+`train_custom_words.py`, and `evaluation/lip-reading/webcam_lip_model_comparison.ipynb`.

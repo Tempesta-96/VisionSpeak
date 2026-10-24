@@ -30,14 +30,14 @@ Two guards make the table trustworthy rather than merely plausible:
 
 Examples::
 
-    .venv/bin/python -m models.LBY.evaluate_epoch_sweep
-    .venv/bin/python -m models.LBY.evaluate_epoch_sweep --device cpu
-    .venv/bin/python -m models.LBY.evaluate_epoch_sweep --epochs 50,200 --refresh-frames
+    .venv/bin/python evaluation/lip-reading/evaluate_epoch_sweep.py
+    .venv/bin/python evaluation/lip-reading/evaluate_epoch_sweep.py --device cpu
+    .venv/bin/python evaluation/lip-reading/evaluate_epoch_sweep.py --epochs 50,200 --refresh-frames
 
     # A different held-out speaker: record them, retrain with
     # TEST_SPEAKER=<id> and a separate OUT directory, then sweep those
     # checkpoints over that speaker's recordings.
-    .venv/bin/python -m models.LBY.evaluate_epoch_sweep \
+    .venv/bin/python evaluation/lip-reading/evaluate_epoch_sweep.py \
         --speakers speaker_008 \
         --checkpoint-dir checkpoints/retrain_speaker_008 \
         --output-dir reports/retrain_speaker_008 --stem epoch_sweep_speaker_008
@@ -58,12 +58,13 @@ from pathlib import Path
 # Direct script execution also needs the repository's shared evaluation modules.
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    __package__ = "evaluation.lip-reading"
 
 import pandas as pd
 import numpy as np
 import torch
 
-from compare_lip_models import (
+from .compare_lip_models import (
     DEFAULT_CACHE_DIR,
     PROJECT_ROOT,
     WORDS,

@@ -4,6 +4,7 @@ import csv
 import io
 import tempfile
 import unittest
+from importlib import import_module
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,7 +14,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-import evaluate_custom_words as ec
+ec = import_module("evaluation.lip-reading.evaluate_custom_words")
 from inference.lip_worker import FRAME_HEIGHT, FRAME_WIDTH, TimestampClock, WORDS
 
 

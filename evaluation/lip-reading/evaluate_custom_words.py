@@ -19,12 +19,12 @@ bypassing the dataset and manifest entirely.
 
 Examples::
 
-    .venv/bin/python evaluate_custom_words.py
-    .venv/bin/python evaluate_custom_words.py --speakers speaker_test_samples
-    .venv/bin/python evaluate_custom_words.py --source mp4 --speakers speaker_test_samples
-    .venv/bin/python evaluate_custom_words.py --video data/custom_words/raw/speaker_test_samples/hello/clip.mp4
-    .venv/bin/python evaluate_custom_words.py --checkpoint checkpoints/valente_custom_words_lipnet_ctc_0.743_acc.pt
-    .venv/bin/python evaluate_custom_words.py --output-csv predictions.csv
+    .venv/bin/python evaluation/lip-reading/evaluate_custom_words.py
+    .venv/bin/python evaluation/lip-reading/evaluate_custom_words.py --speakers speaker_test_samples
+    .venv/bin/python evaluation/lip-reading/evaluate_custom_words.py --source mp4 --speakers speaker_test_samples
+    .venv/bin/python evaluation/lip-reading/evaluate_custom_words.py --video data/custom_words/raw/speaker_test_samples/hello/clip.mp4
+    .venv/bin/python evaluation/lip-reading/evaluate_custom_words.py --checkpoint checkpoints/valente_custom_words_lipnet_ctc_0.743_acc.pt
+    .venv/bin/python evaluation/lip-reading/evaluate_custom_words.py --output-csv predictions.csv
 """
 
 from __future__ import annotations
@@ -35,6 +35,10 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if __package__ in (None, ""):
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import cv2
 import numpy as np
@@ -49,7 +53,6 @@ from inference.lip_worker import (
 )
 from processing.mouth_cropper import MouthCropper
 
-PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_CHECKPOINT = Path("checkpoints/valente_custom_words_lipnet_ctc_0.852_acc.pt")
 DEFAULT_DATA_DIR = Path("data/custom_words")
 CSV_COLUMNS = [

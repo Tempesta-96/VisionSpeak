@@ -1,4 +1,4 @@
-"""Tests for ``models/LBY/evaluate_epoch_sweep.py``.
+"""Tests for ``evaluation/lip-reading/evaluate_epoch_sweep.py``.
 
 These cover the grid bookkeeping that has to be right for the 3x4 table to mean
 anything: that every architecture/epoch cell resolves to a checkpoint, that a
@@ -17,12 +17,13 @@ from __future__ import annotations
 import csv
 import tempfile
 import unittest
+from importlib import import_module
 from pathlib import Path
 
 import torch
 
-import compare_lip_models as comparison
-from models.LBY import evaluate_epoch_sweep as sweep
+comparison = import_module("evaluation.lip-reading.compare_lip_models")
+sweep = import_module("evaluation.lip-reading.evaluate_epoch_sweep")
 
 ONE_ARCHITECTURE = (("ctc_bigru", "CTC + BiGRU"),)
 TWO_ARCHITECTURES = (
