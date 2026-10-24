@@ -30,14 +30,14 @@ Two guards make the table trustworthy rather than merely plausible:
 
 Examples::
 
-    .venv/bin/python evaluate_epoch_sweep.py
-    .venv/bin/python evaluate_epoch_sweep.py --device cpu
-    .venv/bin/python evaluate_epoch_sweep.py --epochs 50,200 --refresh-frames
+    .venv/bin/python -m models.LBY.evaluate_epoch_sweep
+    .venv/bin/python -m models.LBY.evaluate_epoch_sweep --device cpu
+    .venv/bin/python -m models.LBY.evaluate_epoch_sweep --epochs 50,200 --refresh-frames
 
     # A different held-out speaker: record them, retrain with
     # TEST_SPEAKER=<id> and a separate OUT directory, then sweep those
     # checkpoints over that speaker's recordings.
-    .venv/bin/python evaluate_epoch_sweep.py \
+    .venv/bin/python -m models.LBY.evaluate_epoch_sweep \
         --speakers speaker_008 \
         --checkpoint-dir checkpoints/retrain_speaker_008 \
         --output-dir reports/retrain_speaker_008 --stem epoch_sweep_speaker_008
@@ -55,6 +55,10 @@ import re
 import sys
 from pathlib import Path
 
+# Direct script execution also needs the repository's shared evaluation modules.
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 import pandas as pd
 import numpy as np
 import torch
@@ -70,7 +74,7 @@ from compare_lip_models import (
     render_confusion,
     resolve,
 )
-from custom_words_dataset import load_manifest
+from prepare_custom_word_dataset import load_manifest
 
 #: ``(key, display label)`` in the column order the table is printed in.
 ARCHITECTURES: tuple[tuple[str, str], ...] = (
@@ -540,7 +544,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    data_dir = Path(args.data_dir).expanduser().resolve()
+    data_dir = resolve(args.data_dir)
     cache_dir = resolve(args.cache_dir)
     speakers = [name.strip() for name in args.speakers.split(",") if name.strip()]
     expected_speaker = speakers[0] if len(speakers) == 1 else args.speakers
