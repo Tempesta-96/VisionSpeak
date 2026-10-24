@@ -122,15 +122,14 @@ CONFIG = CombinedConfig(
     project_root=PROJECT_ROOT,
     lip_python=LIP_PYTHON,
     gesture_python=GESTURE_PYTHON,
-    lip_checkpoint="checkpoints/custom_run/word_transformer_attention_ep100.pt",
-    gesture_checkpoint="checkpoints/retrain/yolov8n100.pt",
+    lip_checkpoint="checkpoints/retrain/word_transformer_attention_ep200.pt",
+    gesture_checkpoint="checkpoints/retrain/yolov8n50.pt",
 )
 ~~~
 
-3. Run the validation cell, then the session cell. The notebook's existing `checkpoints/retain/word_transformer_ep200.pt` path is invalid and must be replaced.
-4. Focus the OpenCV window: **Space** records one lip word, **M** switches modes, and **Q** quits. The summary cell shows how the session ended.
+3. Focus the OpenCV window: **Space** records one lip word, **M** switches modes, and **Q** quits. The summary cell shows how the session ended.
 
-To use supplied lip weights without retraining, select `checkpoints/retrain/word_transformer_attention_ep200.pt` or `checkpoints/valente_custom_words_lipnet_ctc_0.852_acc.pt`. YOLO gesture checkpoints run in `.venv-yolo`; SX checkpoints run in the lip environment. Checkpoint metadata selects CTC versus word classification and YOLO versus SX automatically. Set `LIP_PYTHON` / `GESTURE_PYTHON` to interpreter paths if using custom environment locations.
+To use supplied lip weights without retraining, select `checkpoints/retrain/word_transformer_attention_ep200.pt` or `checkpoints/retrain/ctc_transformer_ep200.pt`. YOLO gesture checkpoints run in `.venv-yolo`; SX checkpoints run in the lip environment. Checkpoint metadata selects CTC versus word classification and YOLO versus SX automatically. Set `LIP_PYTHON` / `GESTURE_PYTHON` to interpreter paths if using custom environment locations.
 
 The terminal alternative is:
 
