@@ -40,7 +40,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from custom_words_dataset import load_manifest as load_manifest_frame
+from prepare_custom_word_dataset import load_manifest as load_manifest_frame
 from inference.lip_worker import (
     LipPredictor,
     TimestampClock,

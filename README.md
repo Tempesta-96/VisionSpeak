@@ -12,13 +12,14 @@ hello, hi, yes, no, good, bad, thanks, bye
 ```
 
 1. Record mouth-only training clips with `record_custom_word_dataset.ipynb`.
-2. Load and split those clips with `custom_words_dataset.py`.
+2. Load and split those clips with `prepare_custom_word_dataset.py`.
 3. Train the isolated-word classifier with
    `python -m models.LBY.train_custom_words` (`--architecture transformer` or
    `--architecture bigru`), with the notebook version in
    `models/LBY/lip_transformer_training.ipynb` — which gives every run its own
    `checkpoints/lip_transformer/<run_name>/` directory so runs can be compared —
-   or with the custom CTC experiment in `models/valente/custom_word_training.ipynb`,
+   or with the archived custom CTC experiment in
+   `archive/kaggle_lip_reading/models/valente/custom_word_training.ipynb`,
    whose `ARCHITECTURE` setting selects the same two cores for the CTC model.
 4. Test a trained checkpoint live with `webcam_custom_word_detection.ipynb`,
    or offline with `evaluate_custom_words.py` — over recorded clips
@@ -95,7 +96,7 @@ manifest, so changing the stride fails the tests rather than silently breaking
 the loss.
 
 A note on reading the accuracy numbers: the default split in
-`custom_words_dataset.stratified_split` is per-clip random, so **all four
+`prepare_custom_word_dataset.stratified_split` is per-clip random, so **all four
 speakers appear in both train and test**. Use `--speaker-holdout` for a number
 that means something:
 
@@ -142,7 +143,8 @@ every available clip and can accept that trade:
 ```
 
 `models/valente/train_custom_words.py` is the command-line counterpart of
-`models/valente/custom_word_training.ipynb`. The notebook is fine for
+the archived `archive/kaggle_lip_reading/models/valente/custom_word_training.ipynb`.
+The notebook is fine for
 exploration, but it splits clips at random — every speaker lands in train *and*
 test — and then selects its checkpoint on that same set. The script uses the
 speaker-disjoint protocol instead, and reports two test numbers that are not
@@ -177,7 +179,7 @@ EPOCHS_WORD=200 EPOCHS_CTC=200 TAG=ep200 scripts/retrain_lip_models.sh
 ```
 
 `TAG` must be `ep<N>` matching the epoch count: that is the filename convention
-`evaluate_epoch_sweep.py` looks for. The three runs are independent, so they can
+`models/LBY/evaluate_epoch_sweep.py` looks for. The three runs are independent, so they can
 be issued back to back, or concurrently in separate terminals if the GPU has
 room.
 
@@ -198,12 +200,12 @@ scores the same checkpoints one at a time through the deployed inference path.
 
 ### Sweeping epoch budgets
 
-`evaluate_epoch_sweep.py` scores the whole architecture × epoch grid on the
+`models/LBY/evaluate_epoch_sweep.py` scores the whole architecture × epoch grid on the
 held-out speaker's clips and prints it as a 3×4 table of overall test accuracy,
 with epoch budgets down the rows and architectures across the columns:
 
 ```bash
-.venv/bin/python evaluate_epoch_sweep.py
+.venv/bin/python -m models.LBY.evaluate_epoch_sweep
 ```
 
 ```text
@@ -268,7 +270,7 @@ for budget in 50 100 200; do
 done
 
 # Score those checkpoints on that speaker's recordings.
-.venv/bin/python evaluate_epoch_sweep.py \
+.venv/bin/python -m models.LBY.evaluate_epoch_sweep \
     --speakers speaker_008 \
     --checkpoint-dir checkpoints/retrain_speaker_008 \
     --output-dir reports/retrain_speaker_008 \
@@ -382,7 +384,7 @@ worth fixing before the result is trusted:
    the equivalent per-clip split put all four speakers in train *and* test, and
    a speaker-disjoint re-evaluation dropped the score to roughly chance. The
    `transformer/lip-reading` branch has `speaker_disjoint_split()` in
-   `custom_words_dataset.py`; the same protocol should be applied here by
+   `prepare_custom_word_dataset.py`; the same protocol should be applied here by
    splitting on signer before any accuracy figure is quoted.
 2. **Synthetic windows.** Windows are built from still images, so they carry
    jitter and scale drift rather than a real signing trajectory. A model can

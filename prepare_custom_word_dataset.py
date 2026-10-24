@@ -1,4 +1,4 @@
-"""Data loading for the custom isolated-word lip-reading dataset.
+"""Data preparation for the custom isolated-word lip-reading dataset.
 
 Loads ``data/custom_words/manifest.csv`` and lazily reads per-clip grayscale
 mouth frames from the ``.npz`` archives produced by

@@ -14,7 +14,7 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
-from custom_words_dataset import (
+from prepare_custom_word_dataset import (
     DEFAULT_DATA_DIR,
     available_speakers,
     choose_holdout_speaker,

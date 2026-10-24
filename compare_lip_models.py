@@ -49,7 +49,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from custom_words_dataset import load_manifest
+from prepare_custom_word_dataset import load_manifest
 from evaluate_custom_words import (
     ClipResult,
     build_confusion_matrix,
