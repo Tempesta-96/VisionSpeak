@@ -77,7 +77,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     try:
-        from gesture_detector import GestureDetector
+        from models.Lawrence.gesture_detector import GestureDetector
 
         if not args.checkpoint.is_file():
             raise FileNotFoundError(f"Gesture checkpoint not found: {args.checkpoint}")

@@ -307,7 +307,7 @@ contains grayscale mouth frames with shape `(time, 50, 100)` and is indexed by
 
 ## Hand-gesture workflows
 
-- `gesture_detector.py` and `models/Lawrence/main_yolo8n.ipynb` contain the
+- `models/Lawrence/gesture_detector.py` and `models/Lawrence/main_yolo8n.ipynb` contain the
   YOLOv8 gesture detector.
 - `models/SX/` contains the MediaPipe-landmark experiment. It now has two
   temporal cores:

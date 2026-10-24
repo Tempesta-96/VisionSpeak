@@ -1,5 +1,5 @@
 """
-YOLOv8 Hand Gesture Detection Class
+YOLOv8 Hand Gesture Detection Classes
 Provides reusable classes for training, testing, and real-time webcam gesture detection.
 """
 
@@ -11,6 +11,8 @@ from typing import Dict, Optional, Tuple
 import cv2
 import numpy as np
 from ultralytics import YOLO
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class GestureDetector:
@@ -403,7 +405,9 @@ if __name__ == "__main__":
     # Example usage
     
     # Real-time gesture detection
-    detector = GestureDetector("yolov8n_custom.pt", camera_index=0)
+    detector = GestureDetector(
+        str(PROJECT_ROOT / "checkpoints" / "yolov8n_custom.pt"), camera_index=0
+    )
     detector.run_interactive_loop()
     
     # Or use individually:

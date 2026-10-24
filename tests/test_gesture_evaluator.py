@@ -9,7 +9,7 @@ import sys
 import numpy as np
 
 sys.modules["ultralytics"] = SimpleNamespace(YOLO=object)
-from gesture_detector import GestureEvaluator
+from models.Lawrence.gesture_detector import GestureEvaluator
 sys.modules.pop("ultralytics", None)
 
 
