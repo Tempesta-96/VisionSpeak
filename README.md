@@ -132,3 +132,11 @@ CONFIG = CombinedConfig(
 To use supplied lip weights without retraining, select `checkpoints/retrain/word_transformer_attention_ep200.pt` or `checkpoints/retrain/ctc_transformer_ep200.pt`. YOLO gesture checkpoints run in `.venv-yolo`; SX checkpoints run in the lip environment. Checkpoint metadata selects CTC versus word classification and YOLO versus SX automatically. Set `LIP_PYTHON` / `GESTURE_PYTHON` to interpreter paths if using custom environment locations.
 
 Earlier notebook experiments remain under [archive/kaggle_lip_reading](archive/kaggle_lip_reading/README.md).
+
+## 7. Credits / Project Contribution
+| **Official Full Name** | **Student ID (MTech Applicable)** | **Work Items (Who Did What)** | **Email (Optional)** |
+| ---------------------- | --------------------------------- | ----------------------------- | -------------------- |
+| Yew Hwee Peng | A0026237L | | [yew_hwee_peng@u.nus.edu](mailto:yew_hwee_peng@u.nus.edu) |
+| Su Xin | A0339793J | | [su.xin@u.nus.edu](mailto:su.xin@u.nus.edu) |
+| Valente Lam | A0339779B | | [valente.lam@u.nus.edu](mailto:valente.lam@u.nus.edu) |
+| Lee Boon Yao | A0339757J | | [lee.boonyao@u.nus.edu](mailto:lee.boonyao@u.nus.edu) |
