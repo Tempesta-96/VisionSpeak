@@ -131,10 +131,4 @@ CONFIG = CombinedConfig(
 
 To use supplied lip weights without retraining, select `checkpoints/retrain/word_transformer_attention_ep200.pt` or `checkpoints/retrain/ctc_transformer_ep200.pt`. YOLO gesture checkpoints run in `.venv-yolo`; SX checkpoints run in the lip environment. Checkpoint metadata selects CTC versus word classification and YOLO versus SX automatically. Set `LIP_PYTHON` / `GESTURE_PYTHON` to interpreter paths if using custom environment locations.
 
-The terminal alternative is:
-
-~~~powershell
-& $lipPython main.py --lip-checkpoint "$runDir/word_transformer_attention_ep100.pt" --gesture-checkpoint checkpoints/retrain/yolov8n100.pt
-~~~
-
 Earlier notebook experiments remain under [archive/kaggle_lip_reading](archive/kaggle_lip_reading/README.md).
